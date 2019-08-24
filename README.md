@@ -10,4 +10,5 @@ blebox device integration with Hubitat Environment
 # Installation Instructions
 Note	"The instructions are based on a manual installation from the GitHub Site.  A pdf copy of these instructions are contained at the GitHub location:
 
-"https://github.com/DaveGut/bleBox-Hubitat-SmartThings/tree/master/0%20-%20Hubitat"	
+https://github.com/DaveGut/bleBox-Hubitat/blob/master/bleBox-Hubitat_Instructions.pdf
+
