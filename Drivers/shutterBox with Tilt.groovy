@@ -22,7 +22,7 @@ metadata {
 	definition (name: "bleBox shutterBox Tilt",
 				namespace: "davegut",
 				author: "Dave Gutheinz",
-				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Integrations/master/0%20-%20Hubitat/Drivers/shutterBox%20with%20Tilt.groovy"
+				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Drivers/shutterBox%20with%20Tilt.groovy"
 			   ) {
 		capability "Window Shade"
 		capability "Refresh"

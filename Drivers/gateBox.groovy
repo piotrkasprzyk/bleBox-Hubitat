@@ -22,7 +22,7 @@ metadata {
 	definition (name: "bleBox gateBox",
 				namespace: "davegut",
 				author: "Dave Gutheinz",
-				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Integrations/master/0%20-%20Hubitat/Drivers/gateBox.groovy"
+				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Drivers/gateBox.groovy"
 			   ) {
 		capability "Garage Door Control"
 		capability "Momentary"

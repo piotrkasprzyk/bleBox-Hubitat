@@ -22,7 +22,7 @@ metadata {
 	definition (name: "bleBox doorBox",
 				namespace: "davegut",
 				author: "Dave Gutheinz",
-				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Integrations/master/0%20-%20Hubitat/Drivers/doorBox.groovy"
+				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Drivers/doorBox.groovy"
 			   ) {
 		capability "Momentary"
 		capability "Contact Sensor"

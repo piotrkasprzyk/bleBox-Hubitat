@@ -22,7 +22,7 @@ metadata {
 	definition (name: "bleBox airSensor",
 				namespace: "davegut",
 				author: "Dave Gutheinz",
-				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Integrations/master/0%20-%20Hubitat/Drivers/airSensor.groovy"
+				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Drivers/airSensor.groovy"
 			   ) {
 		capability "Momentary"
 		capability "Sensor"
@@ -34,7 +34,7 @@ metadata {
 		attribute "PM_10_Measurement", "string"
 		attribute "PM_10_Trend", "string"
 		attribute "PM_10_Quality", "number"
-		attribute "airQuality", "number"
+		attribute "airQuality", "string"
 		attribute "kickActive", "bool"
 	}
 	preferences {

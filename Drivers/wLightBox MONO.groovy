@@ -22,7 +22,7 @@ metadata {
 	definition (name: "bleBox wLightBox Mono",
 				namespace: "davegut",
 				author: "Dave Gutheinz",
-				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Integrations/master/0%20-%20Hubitat/Drivers/wLightBox%20MONO.groovy"
+				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Drivers/wLightBox%20MONO.groovy"
 			   ) {
 		capability "Light"
 		capability "Switch"

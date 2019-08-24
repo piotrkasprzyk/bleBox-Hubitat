@@ -22,7 +22,7 @@ metadata {
 	definition (name: "bleBox switchBoxD",
 				namespace: "davegut",
 				author: "Dave Gutheinz",
-				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Integrations/master/0%20-%20Hubitat/Drivers/switchBoxD.groovy"
+				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Drivers/switchBoxD.groovy"
 			   ) {
 		capability "Switch"
         capability "Actuator"

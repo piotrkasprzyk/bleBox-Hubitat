@@ -24,7 +24,7 @@ definition(
 	iconUrl: "",
 	iconX2Url: "",
 	singleInstance: true,
-	importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Integrations/master/0%20-%20Hubitat/Application/blebox%20Manager%20App.groovy"
+	importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Application/blebox%20Manager%20App.groovy"
 	)
 preferences {
 	page(name: "mainPage")
@@ -127,10 +127,7 @@ def parseDeviceData(response) {
 	def ip = convertHexToIP(response.ip)
 	def typeData
 	if (type == "gateBox" && cmdResponse.hv.length() > 5) {
-//		log.error cmdResponse.hv.substring(0,7)
 		if (cmdResponse.hv.substring(0,7) == "doorBox") { type = "doorBox" }
-//		log.error cmdResponse
-//		log.error cmdResponse.hv.length()
 	} else if (type == "wLightBox") {
 		type = "wLightBox RGBW"
 	}
@@ -215,25 +212,6 @@ def parseDimmerData(response) {
 }
 def addDevices() {
 	logDebug("addDevices:  Devices = ${state.devices}")
-/*
-device to driver Definitions
-DEVICE			typeData	type (driver)				label
-airSensor		null		bleBox airSensor			deviceName
-dimmerBox		!= 2		bleBox dimmerBox			deviceName
-dimmerBox		2			bleBox dimmerBox NoDim		deviceName
-doorBox			null		bleBox doorBox				deviceName
-gateBox			any			bleBox gateBox				deviceName
-shutterBox		!= 3		bleBox shutterBox			deviceName
-shutterBox		3			bleBox shutterBox Tilt		deviceName
-switchBox		null		bleBox switchBox			deviceName
-switchBoxD		null		bleBox switchBoxD			relays[0].name
-switchBoxD		null		bleBox switchBoxD			relays[1].name
-tempSensor		null		bleBox tempSensor			deviceName
-wLightBox		1,2			bleBox wLightBox RGBW		deviceName
-wLightBox		3			bleBox wLightBox Mono		deviceName
-wLightBoxS		null		bleBox wLightBoxS			deviceName
-*/
-	def hub
 	try { hub = location.hubs[0] }
 	catch (error) { 
 		logWarn("Hub not detected.  You must have a hub to install this app.")
