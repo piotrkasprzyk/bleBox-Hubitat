@@ -12,8 +12,8 @@ and limitations under the License.
 Usage: Use this code freely without reference to origination.
 ===== History =====
 08.14.19	Various edits.
-aa============================================================================================*/
-def appVersion() { return "1.0.02" }
+============================================================================================*/
+def appVersion() { return "1.0.03" }
 import groovy.json.JsonSlurper
 definition(
 	name: "bleBox Integration",
@@ -204,7 +204,7 @@ def parseDimmerData(response) {
 	def cmdResponse = parseResponse(response)
 	logDebug("parseDimmerData: ${cmdResponse}")
 	if (cmdResponse == "error") { return }
-	if (cmdResponse.dimmer.loadType == 2) {
+	if (cmdResponse.dimmer.loadType == 1) {
 		def devIp = convertHexToIP(response.ip)
 		def device = state.devices.find {it.value.ip == devIp }
 		device.value << [type: "dimmerBox NoDim"]
