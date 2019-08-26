@@ -152,7 +152,7 @@ def commandParse(response) {
 	level = (0.5 + level/ 2.55).toInteger()
 	def onOff = "off"
 	if (level > 0) { onOff = "on" }
-	sendEvent(name: "switch", value: "onOff")
+	sendEvent(name: "switch", value: onOff)
 	sendEvent(name: "level", value: level)
 	logInfo "commandParse: switch = ${onOff}, level = ${level}"
 	if (state.pollInterval != "0") {
