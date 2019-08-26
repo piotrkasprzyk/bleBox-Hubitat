@@ -13,7 +13,7 @@ Usage: Use this code freely without reference to origination.
 ===== History =====
 08.14.19	Various edits.
 ============================================================================================*/
-def appVersion() { return "1.0.03" }
+def appVersion() { return "1.0.04" }
 import groovy.json.JsonSlurper
 definition(
 	name: "bleBox Integration",
@@ -149,16 +149,13 @@ def getAddedData() {
 		if (it.value.type == "shutterBox") {
 			state.tempDni = it.value.dni
 			sendGetCmd(it.value.ip, """/api/settings/state""", "parseShutterData")
-			pauseExecution(500)
 		} else if (it.value.type == "switchBoxD") {
 			sendGetCmd(it.value.ip, """/api/relay/state""", "parseRelayData")
-			pauseExecution(500)
 		} else if (it.value.type == "wLightBox RGBW") {
 			sendGetCmd(it.value.ip, """/api/rgbw/state""", "parseRgbwData")
-			pauseExecution(500)
 		} else if (it.value.type == "dimmerBox") {
-			setGetCmd(it.vvalue.ip, "/api/dimmer/state", "parseDimmerData")
 		}
+		pauseExecution(500)
 	}
 	pauseExecution(2000)
 }
@@ -271,14 +268,24 @@ def listDevicesPage() {
 }
 def parseIpData(response) {
 	def cmdResponse = parseResponse(response)
-	if (cmdResponse == "commsError") { return }
-	logDebug("parseIpData: ${cmdResponse}")
-	def device = cmdResponse
-	if (device.device) { device = device.device }
-	def label = device.deviceName
+	if (cmdResponse == "error") { return }
+	
+	
+	
+	
+	
+//	logDebug("parseIpData: ${convertHexToIP(response.ip)} // ${cmdResponse}")
+logDebug("<b>parseIpData: ${convertHexToIP(response.ip)} // ${cmdResponse}</b>")
+	
+	
+	
+	
+	
+	if (cmdResponse.device) { cmdResponse = cmdResponse.device }
+	def label = cmdResponse.deviceName
 	def ip = convertHexToIP(response.ip)
-	def dni = device.id.toUpperCase()
-	if (device.type == "switchBoxD") {
+	def dni = cmdResponse.id.toUpperCase()
+	if (cmdResponse.type == "switchBoxD") {
 		addIpData("${dni}-0", ip, label)
 		addIpData("${dni}-1", ip, label)
 		return
@@ -286,7 +293,7 @@ def parseIpData(response) {
 	addIpData(dni, ip, label)
 }
 def addIpData(dni, ip, label) {
-	logDebug("addData: ${dni} / ${ip} / ${label}")
+	logDebug("addIpData: ${dni} / ${ip} / ${label}")
 	def device = [:]
 	def deviceIps = state.deviceIps
 	device["dni"] = dni
@@ -308,13 +315,13 @@ def updateDevices() {
 	if (deviceIps == [:]) {
 		findDevices(1000, parseIpData)
 		return
-	}
-	devices.each {
-		if (state.missingDevice == true) { return }
-		def deviceIP = it.value.ip
-		runIn(2, setMissing)
-		sendGetCmd(deviceIP, "/api/device/state", checkValid)
-		pauseExecution(2100)
+	} else {
+		devices.each {
+			def deviceIP = it.value.ip
+			runIn(2, setMissing)
+			sendGetCmd(deviceIP, "/api/device/state", checkValid)
+			pauseExecution(2100)
+		}
 	}
 	if (state.missingDevice == true) {
 		state.deviceIps= [:]
@@ -324,8 +331,10 @@ def updateDevices() {
 }
 def checkValid() {
 	def cmdResponse = parseResponse(response)
-	if (cmdResponse == "commsError") { return }
-	logDebug("parseIpData: ${cmdResponse}")
+	if (cmdResponse == "error") { return }
+	logDebug("parseIpData: ${convertHexToIP(response.ip)} // ${cmdResponse}")
+	if (cmdResponse.device) { cmdResponse = cmdResponse.device }
+    else { return }		//	Handle case where a error message is returned by the device.
 	unschedule("setMissing")
 }
 def setMissing() { state.missingDevice = true }
@@ -353,19 +362,25 @@ def findDevices(pollInterval, action) {
 private sendGetCmd(ip, command, action){
 	logDebug("sendGetCmd: ${ip} / ${command} / ${action}")
 	sendHubCommand(new hubitat.device.HubAction("GET ${command} HTTP/1.1\r\nHost: ${ip}\r\n\r\n",
-												hubitat.device.Protocol.LAN, null, [callback: action, timeout: 2]))
+												hubitat.device.Protocol.LAN, null, [callback: action, timeout: 1]))
 }
 def parseResponse(response) {
 	def cmdResponse
 	if(response.status != 200) {
+		logWarn("parseInput: Error - ${convertHexToIP(response.ip)} // ${response.status}")
 		cmdResponse = "error"
-		logWarn("parseResponse: Command generated an error return: ip = ${convertHexToIP(response.ip)}, ${response.status}")
 	} else if (response.body == null){
-		logWarn("parseResponse: ip = ${convertHexToIP(response.ip)}, no data in command response.")
+		logWarn("parseInput: ${convertHexToIP(response.ip)} // no data in command response.")
 		cmdResponse = "error"
 	} else {
+//	Added try to catch potential parsing error
 		def jsonSlurper = new groovy.json.JsonSlurper()
-		cmdResponse = jsonSlurper.parseText(response.body)
+        try {
+        	cmdResponse = jsonSlurper.parseText(response.body)
+        } catch (error) {
+        	cmdResponse = "error"
+        	logWarn("parseInput: error parsing body = ${response.body}")
+        }
 	}
 	return cmdResponse
 }
