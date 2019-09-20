@@ -17,7 +17,7 @@ and limitations under the License.
 				2.	Updates children device's deviceIP baseed on scanning.
 				3.	Offers non-children devices for installation.
 				4.	Installs user-selected devices.
-			b.	Lists Kasa Devices.
+			b.	Lists bleBox Devices.
 				1.	Scans Lan segment for bleBox Devices and creates database entry for found devices.
 				2.	Updates children device's deviceIP baseed on scanning.
 				3.	Displays all found bleBox devices.
