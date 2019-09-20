@@ -9,11 +9,25 @@ License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF 
 either express or implied. See the License for the specific language governing permissions 
 and limitations under the License.
 
-Usage: Use this code freely without reference to origination.
-===== History =====
-08.14.19	Various edits.
-============================================================================================*/
-def appVersion() { return "1.0.04" }
+===== Version Description =====
+09.20.19	Version 1.1 update.
+			Application Execution Options
+			a.	Install bleBox Devices.
+				1.	Scans Lan segment for bleBox Devices and creates database entry for found devices.
+				2.	Updates children device's deviceIP baseed on scanning.
+				3.	Offers non-children devices for installation.
+				4.	Installs user-selected devices.
+			b.	Lists Kasa Devices.
+				1.	Scans Lan segment for bleBox Devices and creates database entry for found devices.
+				2.	Updates children device's deviceIP baseed on scanning.
+				3.	Displays all found bleBox devices.
+			c.	Selection of information and debug logging.
+			Child-Device Called IP Poll (scan)
+			a.	Checks if scan has been done in last 15 minutes.  Exits if true.
+			b.	Scans Lan segment for bleBox Devices and creates database entry for found devices.
+			c.	Updates children device's deviceIP baseed on scanning.
+=============================================================================================*/
+def appVersion() { return "1.1.01" }
 import groovy.json.JsonSlurper
 definition(
 	name: "bleBox Integration",
@@ -31,31 +45,27 @@ preferences {
 	page(name: "addDevicesPage")
 	page(name: "listDevicesPage")
 }
-def setInitialStates() {
-	logDebug("setInitialStates")
-	app?.removeSetting("selectedAddDevices")
-}
+
 def installed() {
 	if (!state.devices) { state.devices = [:] }
-	if (!state.deviceIps) { state.deviceIps = [:] }
-	app?.updateSetting("automaticIpPolling", [type:"bool", value: false])
-	app?.updateSetting("debugLog", [type:"bool", value: false])
-	app?.updateSetting("infoLog", [type:"bool", value: true])
 	initialize()
 }
+
 def updated() { initialize() }
+
 def initialize() {
 	logDebug("initialize")
 	unschedule()
+	app?.updateSetting("pollEnabled", [type:"bool", value: true])
+	if (state.deviceIps) { state.remove("deviceIps") }
 	if (selectedAddDevices) { addDevices() }
-	if (automaticIpPolling == true) { runEvery1Hour(updateDevices) }
 }
 
 
 //	=====	Main Page	=====
 def mainPage() {
 	logDebug("mainPage")
-	setInitialStates()
+	initialize()
 	return dynamicPage(name:"mainPage",
 		title:"<b>bleBox Device Manager</b>",
 		uninstall: true,
@@ -64,26 +74,22 @@ def mainPage() {
 			href "addDevicesPage",
 				title: "<b>Install bleBox Devices</b>",
 				description: "Gets device information. Then offers new devices for install.\n" +
-							 "<b>(It will take a minute for the next page to load.)</b>"
+							 "(It may take several minutes for the next page to load.)"
 			href "listDevicesPage",
-					title: "<b>List all available bleBox devices and update the IP for installed devices.</b>",
+					title: "<b>List all available bleBox devices and update the IP address for installed devices.</b>",
 					description: "Lists available devices.\n" +
-								 "<b>(It will take a minute for the next page to load.)</b>"
+								 "(It may take several minutes for the next page to load.)"
 			input ("infoLog", "bool",
+				   defaultValue: true,
 				   required: false,
 				   submitOnChange: true,
 				   title: "Enable Application Info Logging")
 			input ("debugLog", "bool",
+				   defaultValue: false,
 				   required: false,
 				   submitOnChange: true,
 				   title: "Enable Application Debug Logging")
-			paragraph "<b>Recommendation:  Set Static IP Address in your WiFi router for all bleBox Devices. " +
-				"The polling option takes significant system resources while running.</b>"
-			input ("automaticIpPolling", "bool",
-				   required: false,
-				   submitOnChange: true,
-				   title: "Start (true) / Stop (false) Hourly IP Polling",
-				   description: "Not Recommended.")
+			paragraph "<b>Recommendation:  Set Static IP Address in your WiFi router for all bleBox Devices."
 		}
 	}
 }
@@ -93,8 +99,7 @@ def mainPage() {
 def addDevicesPage() {
 	state.devices = [:]
 	findDevices(200, "parseDeviceData")
-	getAddedData()
-    def devices = state.devices
+	def devices = state.devices
 	def newDevices = [:]
 	devices.each {
 		def isChild = getChildDevice(it.value.dni)
@@ -116,9 +121,10 @@ def addDevicesPage() {
 		}
 	}
 }
+
 def parseDeviceData(response) {
 	def cmdResponse = parseResponse(response)
-	logDebug("parseDeviceData: ${cmdResponse}")
+	logDebug("parseDeviceData: <b>${cmdResponse}")
 	if (cmdResponse == "error") { return }
 	if (cmdResponse.device) { cmdResponse = cmdResponse.device }
 	def label = cmdResponse.deviceName
@@ -126,11 +132,6 @@ def parseDeviceData(response) {
 	def type = cmdResponse.type
 	def ip = convertHexToIP(response.ip)
 	def typeData
-	if (type == "gateBox" && cmdResponse.hv.length() > 5) {
-		if (cmdResponse.hv.substring(0,7) == "doorBox") { type = "doorBox" }
-	} else if (type == "wLightBox") {
-		type = "wLightBox RGBW"
-	}
 	def devData = [:]
 	devData["dni"] = dni
 	devData["ip"] = ip
@@ -141,45 +142,32 @@ def parseDeviceData(response) {
 	if (isChild) {
 		isChild.updateDataValue("deviceIP", ip)
 	}
+	if (type == "switchBoxD") {
+		sendGetCmd(ip, """/api/relay/state""", "parseRelayData")
+	}
 }
-def getAddedData() {
-	logDebug("getAddedData")
+
+
+//	===== Device Specific Actions =====
+def getDeviceData() {
+	logDebug("getDeviceData")
 	devices = state.devices
 	devices.each {
-		if (it.value.type == "shutterBox") {
-			state.tempDni = it.value.dni
-			sendGetCmd(it.value.ip, """/api/settings/state""", "parseShutterData")
-		} else if (it.value.type == "switchBoxD") {
+		if (it.value.type == "switchBoxD") {
 			sendGetCmd(it.value.ip, """/api/relay/state""", "parseRelayData")
-		} else if (it.value.type == "wLightBox RGBW") {
-			sendGetCmd(it.value.ip, """/api/rgbw/state""", "parseRgbwData")
-		} else if (it.value.type == "dimmerBox") {
 		}
-		pauseExecution(500)
-	}
-	pauseExecution(2000)
-}
-def parseShutterData(response) {
-	def cmdResponse = parseResponse(response)
-	logDebug("parseShutterData: ${cmdResponse}")
-	if (cmdResponse == "error") { return }
-	def controlType = cmdResponse.settings.shutter.controlType
-	if (controlType == 3) {
-		def devIp = convertHexToIP(response.ip)
-		def device = state.devices.find {it.value.ip == devIp }
-		device.value << [type: "shutterBox Tilt"]
 	}
 }
+
 def parseRelayData(response) {
 	def cmdResponse = parseResponse(response)
-	logDebug("parseRelayData: ${cmdResponse}")
+	logDebug("parseRelayData: <b>${cmdResponse}")
 	if (cmdResponse == "error") { return }
 	def relays = cmdResponse.relays
 	def devIp = convertHexToIP(response.ip)
 	def device = state.devices.find { it.value.ip == devIp }
 	def dni = device.value.dni
-	device.value << [dni:"${dni}-0", label:relays[0].name, relayNumber:"0"]
-	pauseExecution(2000)
+	device.value << [dni:"${dni}-0", label:"${relays[0].name}", relayNumber:"0"]
 	def relay2Data = ["dni": "${dni}-1",
 					  "ip": device.value.ip,
 					  "type": device.value.type,
@@ -187,26 +175,9 @@ def parseRelayData(response) {
 					  "relayNumber": "1"]
 	state.devices << ["${dni}-1" : relay2Data]
 }
-def parseRgbwData(response) {
-	def cmdResponse = parseResponse(response)
-	logDebug("parseRgbwData: ${cmdResponse}")
-	if (cmdResponse == "error") { return }
-	if (cmdResponse.rgbw.colorMode == 3) {
-		def devIp = convertHexToIP(response.ip)
-		def device = state.devices.find {it.value.ip == devIp }
-		device.value << [type: "wLightBox Mono"]
-	}
-}
-def parseDimmerData(response) {
-	def cmdResponse = parseResponse(response)
-	logDebug("parseDimmerData: ${cmdResponse}")
-	if (cmdResponse == "error") { return }
-	if (cmdResponse.dimmer.loadType == 1) {
-		def devIp = convertHexToIP(response.ip)
-		def device = state.devices.find {it.value.ip == devIp }
-		device.value << [type: "dimmerBox NoDim"]
-	}
-}
+
+
+//	===== Add Devices =====
 def addDevices() {
 	logDebug("addDevices:  Devices = ${state.devices}")
 	try { hub = location.hubs[0] }
@@ -244,13 +215,14 @@ def addDevices() {
 
 //	=====	Update Device IPs	=====
 def listDevicesPage() {
-	logDebug("updateIpsPage")
-	state.deviceIps = [:]
-	findDevices(200, "parseIpData")
-	def deviceIps = state.deviceIps
+	logDebug("listDevicesPage")
+	state.devices = [:]
+	findDevices(200, "parseDeviceData")
+	pauseExecution(5000)
+	def devices = state.devices
 	def foundDevices = "<b>Found Devices (Installed / DNI / IP / Alias):</b>"
 	def count = 1
-	deviceIps.each {
+	devices.each {
 		def installed = false
 		if (getChildDevice(it.value.dni)) { installed = true }
 		foundDevices += "\n${count}:\t${installed}\t${it.value.dni}\t${it.value.ip}\t${it.value.label}"
@@ -266,81 +238,65 @@ def listDevicesPage() {
 		}
 	}
 }
-def parseIpData(response) {
-	def cmdResponse = parseResponse(response)
-	if (cmdResponse == "error") { return }
-	
-	
-	
-	
-	
-//	logDebug("parseIpData: ${convertHexToIP(response.ip)} // ${cmdResponse}")
-logDebug("<b>parseIpData: ${convertHexToIP(response.ip)} // ${cmdResponse}</b>")
-	
-	
-	
-	
-	
-	if (cmdResponse.device) { cmdResponse = cmdResponse.device }
-	def label = cmdResponse.deviceName
-	def ip = convertHexToIP(response.ip)
-	def dni = cmdResponse.id.toUpperCase()
-	if (cmdResponse.type == "switchBoxD") {
-		addIpData("${dni}-0", ip, label)
-		addIpData("${dni}-1", ip, label)
-		return
-	}
-	addIpData(dni, ip, label)
-}
-def addIpData(dni, ip, label) {
-	logDebug("addIpData: ${dni} / ${ip} / ${label}")
-	def device = [:]
-	def deviceIps = state.deviceIps
-	device["dni"] = dni
-	device["ip"] = ip
-	device["label"] = label
-	deviceIps << ["${dni}" : device]
-	def isChild = getChildDevice(dni)
-	if (isChild) {
-		isChild.updateDataValue("deviceIP", ip)
-	}
-}
 
 
 //	===== Recurring IP Check =====
+def updateDeviceIps() {
+	logDebug("updateDeviceIps: Updating Device IPs after hub reboot.")
+	runIn(5, updateDevices)
+}
+
 def updateDevices() {
-	logDebug("UpdateDevices: ${state.devices}")
-	state.missingDevice = false
-	def devices = state.deviceIps
-	if (deviceIps == [:]) {
-		findDevices(1000, parseIpData)
-		return
+	if (pollEnabled == true) {
+		app?.updateSetting("pollEnabled", [type:"bool", value: false])
+		runIn(900, pollEnable)
 	} else {
-		devices.each {
-			def deviceIP = it.value.ip
-			runIn(2, setMissing)
-			sendGetCmd(deviceIP, "/api/device/state", checkValid)
-			pauseExecution(2100)
+		logWarn("updateDevices: a poll was run within the last 15 minutes.  Exited.")
+		return
+	}
+	def children = getChildDevices()
+	logDebug("UpdateDevices: ${children} / ${pollEnabled}")
+	app?.updateSetting("missingDevice", [type:"bool", value: false])
+	children.each {
+		if (it.isDisabled()) {
+			logDebug("updateDevices: ${it} is disabled and not checked.")
+			return
 		}
+		def ip = it.getDataValue("deviceIP")
+		runIn(2, setMissing)
+		sendGetCmd(ip, "/api/device/state", "checkValid")
+		pauseExecution(3000)
 	}
-	if (state.missingDevice == true) {
-		state.deviceIps= [:]
-		findDevices(1000, parseIpData)
-		state.missingDevices == false
+	runIn(2, pollIfMissing)
+}
+
+def pollIfMissing() {
+	logDebug("pollIfMissing: ${missingDevice}.")
+	if (missingDevice == true) {
+		state.devices= [:]
+		findDevices(200, parseDeviceData)
+		app?.updateSetting("missingDevice", [type:"bool", value: false])
 	}
 }
-def checkValid() {
-	def cmdResponse = parseResponse(response)
-	if (cmdResponse == "error") { return }
-	logDebug("parseIpData: ${convertHexToIP(response.ip)} // ${cmdResponse}")
-	if (cmdResponse.device) { cmdResponse = cmdResponse.device }
-    else { return }		//	Handle case where a error message is returned by the device.
+
+def checkValid(response) {
 	unschedule("setMissing")
+	def resp = parseLanMessage(response.description)
+	logDebug("checkValid: response received from ${convertHexToIP(resp.ip)}")
 }
-def setMissing() { state.missingDevice = true }
+
+def setMissing() {
+	logWarn("setMissing: Setting missingDevice to true")
+	app?.updateSetting("missingDevice", [type:"bool", value: true])
+}
+
+def pollEnable() {
+	logDebug("pollEnable")
+	app?.updateSetting("pollEnabled", [type:"bool", value: true])
+}
 
 
-//	=====	Device Communications	=====
+//	=====	bleBox Specific Communications	=====
 def findDevices(pollInterval, action) {
 	logDebug("findDevices: ${pollInterval} / ${action}")
 	def hub
@@ -357,12 +313,12 @@ def findDevices(pollInterval, action) {
 		sendGetCmd(deviceIP, "/api/device/state", action)
 		pauseExecution(pollInterval)
 	}
-	pauseExecution(3000)
+	pauseExecution(5000)
 }
 private sendGetCmd(ip, command, action){
 	logDebug("sendGetCmd: ${ip} / ${command} / ${action}")
 	sendHubCommand(new hubitat.device.HubAction("GET ${command} HTTP/1.1\r\nHost: ${ip}\r\n\r\n",
-												hubitat.device.Protocol.LAN, null, [callback: action, timeout: 1]))
+												hubitat.device.Protocol.LAN, null, [callback: action]))
 }
 def parseResponse(response) {
 	def cmdResponse
@@ -373,7 +329,6 @@ def parseResponse(response) {
 		logWarn("parseInput: ${convertHexToIP(response.ip)} // no data in command response.")
 		cmdResponse = "error"
 	} else {
-//	Added try to catch potential parsing error
 		def jsonSlurper = new groovy.json.JsonSlurper()
         try {
         	cmdResponse = jsonSlurper.parseText(response.body)
@@ -386,7 +341,7 @@ def parseResponse(response) {
 }
 
 
-//	=====	Utility methods	=====
+//	===== General Utility methods =====
 def uninstalled() {
     getAllChildDevices().each { 
         deleteChildDevice(it.deviceNetworkId)
