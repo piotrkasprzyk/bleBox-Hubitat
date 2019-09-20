@@ -15,9 +15,10 @@ open API documentation for development and is intended for integration into the 
 ===== Hiatory =====
 8.14.19	Various edits.
 08.15.19	1.1.01. Integrated design notes at bottom and updated implementation per notes.
+09.20.19	1.2.01.	Added link to Application that will check/update IPs if the communications fail.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.1.01" }
+def driverVer() { return "1.2.01" }
 metadata {
 	definition (name: "bleBox tempSensor",
 				namespace: "davegut",
@@ -28,6 +29,7 @@ metadata {
 		attribute "trend", "string"
 		attribute "sensorHealth", "string"
 		capability "Refresh"
+		attribute "commsError", "bool"
 	}
 	preferences {
 		if (!getDataValue("applicationVersion")) {
@@ -44,10 +46,12 @@ metadata {
 		input ("descriptionText", "bool", title: "Enable description text logging", defaultValue: true)
 	}
 }
+
 def installed() {
 	logInfo("Installing...")
 	runIn(2, updated)
 }
+
 def updated() {
 	logInfo("Updating...")
 	unschedule()
@@ -67,28 +71,26 @@ def updated() {
 		case "15" : runEvery15Minutes(refresh); break
 		default: runEvery30Minutes(refresh)
 	}
-
-	if (nameSync == "device" || nameSync == "hub") { syncName() }
+	state.errorCount = 0
 	updateDataValue("driverVersion", driverVer())
 
 	logInfo("Debug logging is: ${debug}.")
 	logInfo("Description text logging is ${descriptionText}.")
 	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
+
+	if (nameSync == "device" || nameSync == "hub") { syncName() }
 	refresh()
 }
+
 
 //	===== Commands and Parse Returns =====
 def refresh() {
 	logDebug("refresh.")
 	sendGetCmd("/api/tempsensor/state", "commandParse")
 }
+
 def commandParse(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
+	def cmdResponse = parseInput(response)
 	logDebug("commandParse: cmdResponse = ${cmdResponse}")
 
 	def respData = cmdResponse.tempSensor.sensors[0]
@@ -131,22 +133,12 @@ def syncName() {
 	}
 }
 def nameSyncHub(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
+	def cmdResponse = parseInput(response)
 	logDebug("nameSyncHub: ${cmdResponse}")
 	logInfo("Setting bleBox device label to that of the Hubitat device.")
 }
 def nameSyncDevice(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
+	def cmdResponse = parseInput(response)
 	logDebug("nameSyncDevice: ${cmdResponse}")
 	def deviceName = cmdResponse.device.deviceName
 	device.setLabel(deviceName)
@@ -156,12 +148,16 @@ def nameSyncDevice(response) {
 
 //	===== Communications =====
 private sendGetCmd(command, action){
-	logDebug("sendCmd: command = ${command} // device IP = ${getDataValue("deviceIP")}")
+	logDebug("sendGetCmd: ${command} / ${action} / ${getDataValue("deviceIP")}")
+	state.lastCommand = [type: "get", command: "${command}", body: "n/a", action: "${action}"]
+	runIn(3, setCommsError)
 	sendHubCommand(new hubitat.device.HubAction("GET ${command} HTTP/1.1\r\nHost: ${getDataValue("deviceIP")}\r\n\r\n",
 				   hubitat.device.Protocol.LAN, null,[callback: action]))
 }
 private sendPostCmd(command, body, action){
-	logDebug("sendPostCmd: command = ${command} // body = ${body}")
+	logDebug("sendGetCmd: ${command} / ${body} / ${action} / ${getDataValue("deviceIP")}")
+	state.lastCommand = [type: "post", command: "${command}", body: "${body}", action: "${action}"]
+	runIn(3, setCommsError)
 	def parameters = [ method: "POST",
 					  path: command,
 					  protocol: "hubitat.device.Protocol.LAN",
@@ -170,6 +166,48 @@ private sendPostCmd(command, body, action){
 						  Host: getDataValue("deviceIP")
 					  ]]
 	sendHubCommand(new hubitat.device.HubAction(parameters, null, [callback: action]))
+}
+def parseInput(response) {
+	unschedule(setCommsError)
+	state.errorCount = 0
+	sendEvent(name: "commsError", value: false)
+	if(response.status != 200 || response.body == null) {
+		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
+		return
+	}
+	try {
+		def jsonSlurper = new groovy.json.JsonSlurper()
+		return jsonSlurper.parseText(response.body)
+	} catch (error) {
+		logWarn "CommsError: ${error}."
+	}
+}
+def setCommsError() {
+	logDebug("setCommsError")
+	if (state.errorCount < 3) {
+		state.errorCount+= 1
+		repeatCommand()
+		logWarn("Attempt ${state.errorCount} to recover communications")
+	} else if (state.errorCount == 3) {
+		state.errorCount += 1
+		if (!getDataValue("applicationVersion")) {
+			logWarn("setCommsError: Parent commanded to poll for devices to correct error.")
+			parent.updateDeviceIps()
+			runIn(90, repeatCommand)
+		}
+	} else {
+		sendEvent(name: "commsError", value: true)
+		logWarn "setCommsError: No response from device.  Refresh.  If off line " +
+				"persists, check IP address of device."
+	}
+}
+def repeatCommand() { 
+	logDebug("repeatCommand: ${state.lastCommand}")
+	if (state.lastCommand.type == "post") {
+		sendPostCmd(state.lastCommand.command, state.lastCommand.body, state.lastCommand.action)
+	} else {
+		sendGetCmd(state.lastCommand.command, state.lastCommand.action)
+	}
 }
 
 
@@ -182,25 +220,4 @@ def logDebug(msg){
 }
 def logWarn(msg){ log.warn "<b>${device.label} ${driverVer()}</b> ${msg}" }
 
-/*
-===== DESIGN NOTES =====
-tempSensor
------ Device Installation Assumptions
-	None.
------ Capability and Commands
-	Capability: Temperature Measurement
-		Attribute:	temperature: Current value of the temperature in the preference tempScale.
-	Attribute: trend.  Current trend (up/down/even) of measurement.
-	Attribute: sensorHealth:  Sensor health from tempSensor.
-	Capability: Refresh
-		Command: refresh().  Forces reading of switchBox state data.
------ Preferences
-	device_IP:  Used in manual installation of driver only.
-	refreshInterval:  frequency to refresh the attribute 'contact'.  Sets to a default
-					  of 1 minute.
-	tempScale: F or C, display scale of temperature.
-	nameSync: Coordinates the naming between the device and the Hubitat interface.
-			  'Hubitat Label Master' - changes name in bleBox device
-			  'bleBox device name master' - changes Hubitat label to name in bleBox device.
-*/
 //	end-of-file

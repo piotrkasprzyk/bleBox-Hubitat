@@ -15,9 +15,12 @@ open API documentation for development and is intended for integration into the 
 ===== Hiatory =====
 8.14.19	Various edits.
 08.15.19	1.1.01. Modified implementaton based on design notes.
+09.20.19	1.2.01.	a.  Added link to Application that will check/update IPs if the communications fail.
+					b.	Added configure method that sets as dimmable or undimmable.
+					c.	Combined two shutterBox drivers into one.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.1.01" }
+def driverVer() { return "1.2.01" }
 metadata {
 	definition (name: "bleBox shutterBox",
 				namespace: "davegut",
@@ -27,6 +30,9 @@ metadata {
 		capability "Window Shade"
 		capability "Refresh"
 		command "stop"
+		command "setTilt", ["NUMBER"]
+		attribute "tilt", "number"
+		attribute "commsError", "bool"
 	}
 	preferences {
 		if (!getDataValue("applicationVersion")) {
@@ -42,10 +48,12 @@ metadata {
 		input ("descriptionText", "bool", title: "Enable description text logging", defaultValue: true)
 	}
 }
+
 def installed() {
 	logInfo("Installing...")
 	runIn(2, updated)
 }
+
 def updated() {
 	logInfo("Updating...")
 	unschedule()
@@ -65,14 +73,39 @@ def updated() {
 		case "15" : runEvery15Minutes(refresh); break
 		default: runEvery30Minutes(refresh)
 	}
-
-	if (nameSync == "device" || nameSync == "hub") { syncName() }
+	state.errorCount = 0
 	updateDataValue("driverVersion", driverVer())
 
 	logInfo("Debug logging is: ${debug}.")
 	logInfo("Description text logging is ${descriptionText}.")
 	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
-	refresh()
+
+	if (!getDataValue("mode")) {
+		sendGetCmd("/api/settings/state", "configure")
+	}
+	if (nameSync == "device" || nameSync == "hub") { syncName() }
+	runIn(2, refresh)
+}
+
+def configure(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("configure: ${cmdResponse}")
+	if (cmdResponse == "error") { return }
+	def mode
+	switch (cmdResponse.settings.shutter.controlType) {
+		case "1": mode = "roller" ; break
+		case "2": mode = "withoutPositioning"; break
+		case "3": mode = "tilt"; break
+		case "4": mode = "windowOpener"; break
+		case "5": mode = "material"; break
+		case "6": mode = "awning"; break
+		case "7": mode = "screen"; break
+		default: mode = "notSet"
+	}
+	updateDataValue("mode", mode)
+	if (mode != "tilt") {
+		sendEvent(name: "tilt", value: null)
+	}
 }
 
 
@@ -81,42 +114,43 @@ def open() {
 	logDebug("open")
 	sendGetCmd("/s/u", "commandParse")
 }
+
 def close() {
 	logDebug("close")
 	sendGetCmd("/s/d", "commandParse")
 }
+
 def stop() {
 	logDebug("stop")
 	sendGetCmd("/api/shutter/state", "stopParse")
 }
-def stopParse(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
 
+def stopParse(response) {
+	def cmdResponse = parseInput(response)
 	logDebug("stopParse: cmdResponse = ${cmdResponse}")
 	def stopPosition = cmdResponse.shutter.currentPos.position
 	setPosition(stopPosition.toInteger())
 }
+
 def setPosition(percentage) {
 	logDebug("setPosition: percentage = ${percentage}")
 	sendGetCmd("/s/p/${percentage}", "commandParse")
 }
+
+def setTilt(percentage) {
+	if (getDataValue("mode") == "tilt") {
+		logDebug("setTilt: percentage = ${percentage}")
+		sendGetCmd("/s/t/${percentage}", "commandParse")
+	}
+}
+
 def refresh() {
 	logDebug("refresh")
 	sendGetCmd("/api/shutter/extended/state", "commandParse")
 }
-def commandParse(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
 
+def commandParse(response) {
+	def cmdResponse = parseInput(response)
 	logDebug("commandParse: cmdResponse = ${cmdResponse}")
 	def shutter = cmdResponse.shutter
 	def windowShade
@@ -140,7 +174,9 @@ def commandParse(response) {
 			windowShade = "unknown"
 	}
 	sendEvent(name: "position", value: shutter.currentPos.position)
-	sendEvent(name: "tilt", value: shutter.currentPos.tilt)
+	if (getDataValue("mode") == "tilt") {
+		sendEvent(name: "tilt", value: shutter.currentPos.tilt)
+	}
 	sendEvent(name: "windowShade", value: windowShade)
 	logInfo("commandParse: position = ${shutter.currentPos.position}")
 	if(shutter.currentPos != shutter.desiredPos) { runIn(10, refresh) }
@@ -159,24 +195,12 @@ def syncName() {
 	}
 }
 def nameSyncHub(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
-
+	def cmdResponse = parseInput(response)
 	logDebug("nameSyncHub: ${cmdResponse}")
 	logInfo("Setting device label to that of the bleBox device.")
 }
 def nameSyncDevice(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
-
+	def cmdResponse = parseInput(response)
 	logDebug("nameSyncDevice: ${cmdResponse}")
 	def deviceName = cmdResponse.device.deviceName
 	device.setLabel(deviceName)
@@ -186,12 +210,16 @@ def nameSyncDevice(response) {
 
 //	===== Communications =====
 private sendGetCmd(command, action){
-	logDebug("sendCmd: command = ${command} // device IP = ${getDataValue("deviceIP")}")
+	logDebug("sendGetCmd: ${command} / ${action} / ${getDataValue("deviceIP")}")
+	state.lastCommand = [type: "get", command: "${command}", body: "n/a", action: "${action}"]
+	runIn(3, setCommsError)
 	sendHubCommand(new hubitat.device.HubAction("GET ${command} HTTP/1.1\r\nHost: ${getDataValue("deviceIP")}\r\n\r\n",
 				   hubitat.device.Protocol.LAN, null,[callback: action]))
 }
 private sendPostCmd(command, body, action){
-	logDebug("sendPostCmd: command = ${command} // body = ${body}")
+	logDebug("sendGetCmd: ${command} / ${body} / ${action} / ${getDataValue("deviceIP")}")
+	state.lastCommand = [type: "post", command: "${command}", body: "${body}", action: "${action}"]
+	runIn(3, setCommsError)
 	def parameters = [ method: "POST",
 					  path: command,
 					  protocol: "hubitat.device.Protocol.LAN",
@@ -200,6 +228,48 @@ private sendPostCmd(command, body, action){
 						  Host: getDataValue("deviceIP")
 					  ]]
 	sendHubCommand(new hubitat.device.HubAction(parameters, null, [callback: action]))
+}
+def parseInput(response) {
+	unschedule(setCommsError)
+	state.errorCount = 0
+	sendEvent(name: "commsError", value: false)
+	if(response.status != 200 || response.body == null) {
+		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
+		return
+	}
+	try {
+		def jsonSlurper = new groovy.json.JsonSlurper()
+		return jsonSlurper.parseText(response.body)
+	} catch (error) {
+		logWarn "CommsError: ${error}."
+	}
+}
+def setCommsError() {
+	logDebug("setCommsError")
+	if (state.errorCount < 3) {
+		state.errorCount+= 1
+		repeatCommand()
+		logWarn("Attempt ${state.errorCount} to recover communications")
+	} else if (state.errorCount == 3) {
+		state.errorCount += 1
+		if (!getDataValue("applicationVersion")) {
+			logWarn("setCommsError: Parent commanded to poll for devices to correct error.")
+			parent.updateDeviceIps()
+			runIn(90, repeatCommand)
+		}
+	} else {
+		sendEvent(name: "commsError", value: true)
+		logWarn "setCommsError: No response from device.  Refresh.  If off line " +
+				"persists, check IP address of device."
+	}
+}
+def repeatCommand() { 
+	logDebug("repeatCommand: ${state.lastCommand}")
+	if (state.lastCommand.type == "post") {
+		sendPostCmd(state.lastCommand.command, state.lastCommand.body, state.lastCommand.action)
+	} else {
+		sendGetCmd(state.lastCommand.command, state.lastCommand.action)
+	}
 }
 
 

@@ -15,23 +15,30 @@ open API documentation for development and is intended for integration into the 
 ===== Hiatory =====
 8.14.19	Various edits.
 08.15.19	1.1.01. Modified implementaton based on design notes.
+09.20.19	1.2.01.	a.  Added link to Application that will check/update IPs if the communications fail.
+					b.	Added configure method that sets as gate type (mode).
+					c.	Combined gateBox and doorBox drivers into one.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.1.01" }
+def driverVer() { return "1.2.01" }
 metadata {
 	definition (name: "bleBox gateBox",
 				namespace: "davegut",
 				author: "Dave Gutheinz",
 				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Drivers/gateBox.groovy"
 			   ) {
-		capability "Garage Door Control"
 		capability "Momentary"
+		capability "Contact Sensor"
 		capability "Refresh"
+		attribute "commsError", "bool"
 	}
 	preferences {
 		if (!getDataValue("applicationVersion")) {
 			input ("device_IP", "text", title: "Device IP (Current = ${getDataValue("deviceIP")})")
 		}
+		input ("reverseSense", "bool", title: "Reverse reported Open and Close Status.", defaultValue: false)
+		input ("cycleTime", "number",title: "Nominal Door Cycle Time (seconds)",
+			   defaultValue: 30)
 		input ("refreshInterval", "enum", title: "Device Refresh Interval (minutes)", 
 			   options: ["1", "5", "15", "30"], defaultValue: "30")
 		input ("nameSync", "enum", title: "Synchronize Names", defaultValue: "none",
@@ -42,10 +49,12 @@ metadata {
 		input ("descriptionText", "bool", title: "Enable description text logging", defaultValue: true)
 	}
 }
+
 def installed() {
 	logInfo("Installing...")
 	runIn(2, updated)
 }
+
 def updated() {
 	logInfo("Updating...")
 	unschedule()
@@ -65,61 +74,57 @@ def updated() {
 		case "15" : runEvery15Minutes(refresh); break
 		default: runEvery30Minutes(refresh)
 	}
-
-	if (nameSync == "device" || nameSync == "hub") { syncName() }
+	state.errorCount = 0
 	updateDataValue("driverVersion", driverVer())
 
 	logInfo("Debug logging is: ${debug}.")
 	logInfo("Description text logging is ${descriptionText}.")
 	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
-	refresh()
+
+	if (!getDataValue("mode")) {
+		sendGetCmd("/api/gate/state", "configure")
+	}
+	if (nameSync == "device" || nameSync == "hub") { runIn(5, syncName) }
+	runIn(2, refresh)
+}
+
+def configure(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("configure: <b>${cmdResponse}")
+	if (cmdResponse == "error") { return }
+	def mode
+	switch(cmdResponse.gateType) {
+		case "0": mode = "slidingDoor"; break
+		case "1": mode = "garageDoor"; break
+		case "2": mode = "overDoor"; break
+		case "3": mode = "door"; break
+		default: mode = "notSet"
+	}
+	updateDataValue("mode", mode)
 }
 
 
 //	===== Commands and Parse Returns =====
-def open() {
-	logDebug("open: ${device.currentValue("door")}")
-	if (device.currentValue("door") == "open") {
-		logInfo("Door is already open")
-	}
-	state.lastCommand = "open"
-	sendGetCmd("/s/p", "commandParse")
-}
-def close() {
-	logDebug("open: ${device.currentValue("door")}")
-	if (device.currentValue("door") == "closed") {
-		logInfo("Door is already closed")
-	}
-	state.lastCommand = "close"
-	sendGetCmd("/s/p", "commandParse")
-}
 def push() {
-	logDebug("secondary")
-	sendGetCmd("/s/s", "commandParse")
+	logDebug("push: currently ${device.currentValue("contact")}")
+	sendGetCmd("/s/p", "commandParse")
+	runIn(cycleTime.toInteger(), refresh)
 }
+
 def refresh() {
 	logDebug("refresh")
 	sendGetCmd("/api/gate/state", "commandParse")
 }
-def commandParse(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
 
-	logDebug("refreshParse: response = ${cmdResponse}")
-	def position = cmdResponse.currentPos
-	def desiredPos = cmdResponse.desiredPos
-	def doorState
-	if (position == 100) { doorState = "open" }
-	else if (position == 0) { doorState = "closed" }
-	else if (state.lastCommand == "open") { doorState = "opening" }
-	else if (state.lastCommand == "close") { doorState = "closing" }
-	else { doorState = "unknown" }
-	sendEvent(name: "door", value: doorState)
-	log.info "${device.label} refreshResponse: door = ${doorState}"
+def commandParse(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("commandParse: ${cmdResponse}")
+	if (cmdResponse.gate) { cmdResponse = cmdResponse.gate }
+	def closedPos = 0
+	if (reverseSense == true) { closedPos = 100 }
+	def contact = "open"
+	if (cmdResponse.currentPos == closedPos) { contact = "closed" }
+	sendEvent(name: "contact", value: contact)
 }
 
 
@@ -135,24 +140,12 @@ def syncName() {
 	}
 }
 def nameSyncHub(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
-
+	def cmdResponse = parseInput(response)
 	logDebug("nameSyncHub: ${cmdResponse}")
 	logInfo("Setting device label to that of the bleBox device.")
 }
 def nameSyncDevice(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
-
+	def cmdResponse = parseInput(response)
 	logDebug("nameSyncDevice: ${cmdResponse}")
 	def deviceName = cmdResponse.deviceName
 	device.setLabel(deviceName)
@@ -162,12 +155,16 @@ def nameSyncDevice(response) {
 
 //	===== Communications =====
 private sendGetCmd(command, action){
-	logDebug("sendCmd: command = ${command} // device IP = ${getDataValue("deviceIP")}")
+	logDebug("sendGetCmd: ${command} / ${action} / ${getDataValue("deviceIP")}")
+	state.lastCommand = [type: "get", command: "${command}", body: "n/a", action: "${action}"]
+	runIn(3, setCommsError)
 	sendHubCommand(new hubitat.device.HubAction("GET ${command} HTTP/1.1\r\nHost: ${getDataValue("deviceIP")}\r\n\r\n",
 				   hubitat.device.Protocol.LAN, null,[callback: action]))
 }
 private sendPostCmd(command, body, action){
-	logDebug("sendPostCmd: command = ${command} // body = ${body}")
+	logDebug("sendGetCmd: ${command} / ${body} / ${action} / ${getDataValue("deviceIP")}")
+	state.lastCommand = [type: "post", command: "${command}", body: "${body}", action: "${action}"]
+	runIn(3, setCommsError)
 	def parameters = [ method: "POST",
 					  path: command,
 					  protocol: "hubitat.device.Protocol.LAN",
@@ -176,6 +173,48 @@ private sendPostCmd(command, body, action){
 						  Host: getDataValue("deviceIP")
 					  ]]
 	sendHubCommand(new hubitat.device.HubAction(parameters, null, [callback: action]))
+}
+def parseInput(response) {
+	unschedule(setCommsError)
+	state.errorCount = 0
+	sendEvent(name: "commsError", value: false)
+	if(response.status != 200 || response.body == null) {
+		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
+		return
+	}
+	try {
+		def jsonSlurper = new groovy.json.JsonSlurper()
+		return jsonSlurper.parseText(response.body)
+	} catch (error) {
+		logWarn "CommsError: ${error}."
+	}
+}
+def setCommsError() {
+	logDebug("setCommsError")
+	if (state.errorCount < 3) {
+		state.errorCount+= 1
+		repeatCommand()
+		logWarn("Attempt ${state.errorCount} to recover communications")
+	} else if (state.errorCount == 3) {
+		state.errorCount += 1
+		if (!getDataValue("applicationVersion")) {
+			logWarn("setCommsError: Parent commanded to poll for devices to correct error.")
+			parent.updateDeviceIps()
+			runIn(90, repeatCommand)
+		}
+	} else {
+		sendEvent(name: "commsError", value: true)
+		logWarn "setCommsError: No response from device.  Refresh.  If off line " +
+				"persists, check IP address of device."
+	}
+}
+def repeatCommand() { 
+	logDebug("repeatCommand: ${state.lastCommand}")
+	if (state.lastCommand.type == "post") {
+		sendPostCmd(state.lastCommand.command, state.lastCommand.body, state.lastCommand.action)
+	} else {
+		sendGetCmd(state.lastCommand.command, state.lastCommand.action)
+	}
 }
 
 
@@ -188,32 +227,4 @@ def logDebug(msg){
 }
 def logWarn(msg){ log.warn "<b>${device.label} ${driverVer()}</b> ${msg}" }
 
-/*
-===== DESIGN NOTES =====
------ Device Installation Assumptions
-	The device is assumed to have a two limit switches installed to detect open and closed
-	separately.  If not, the device does not know the open/closed state for commands.
------ Capability and Commands
-	Capability: Grarge Door Control.  Control and status of the primary door functions.
-		Command:  open.  Opens a closed door.  A press while in-motion is based on how the
-						 the actual gate/door hardware works.
-		Command:  closed.  Closes an opened door.  Sends message if pressed when door is closed.
-		Attribute: door. unknown, open, closing, closed, opening
-	Capability: Momentary.  Used to implement the Secondary Control
-		Command: push.
-	Capability: Refresh
-		Command: refresh().  Forces reading of doorBox state data.
------ Preferences
-	device_IP:  Used in manual installation of driver only.
-	doorSwitch: false is default.  If set to true, door will poll every 10 seconds if
-				the detected state is open.  Additionally, if the door switch is not
-				installed, the refresh interval will be set to every 30 minutes to
-				check the device health (since it is no longer reporting anything of
-				value to the interface).  Additionally, fast polling will not work.
-	refreshInterval:  frequency to refresh the attribute 'contact'.  Sets to a default
-					  of 1 minute.
-	nameSync: Coordinates the naming between the device and the Hubitat interface.
-			  'Hubitat Label Master' - changes name in bleBox device
-			  'bleBox device name master' - changes Hubitat label to name in bleBox device.
-*/
 //	end-of-file

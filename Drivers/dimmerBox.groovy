@@ -15,9 +15,12 @@ open API documentation for development and is intended for integration into the 
 ===== Hiatory =====
 8.14.19	Various edits.
 08.15.19	1.1.01. Integrated design notes at bottom and updated implementation per notes.
+09.20.19	1.2.01.	a.	Added link to Application that will check/update IPs if the communications fail.
+					b.	Added configure method that sets as dimmable or undimmable.
+					c.	Combined two dimmerBox drivers into one.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.1.01" }
+def driverVer() { return "1.2.01" }
 metadata {
 	definition (name: "bleBox dimmerBox",
 				namespace: "davegut",
@@ -28,6 +31,7 @@ metadata {
 		capability "Switch Level"
 		capability "Actuator"
 		capability "Refresh"
+		attribute "commsError", "bool"
 	}
 	preferences {
 		if (!getDataValue("applicationVersion")) {
@@ -37,8 +41,8 @@ metadata {
 			   defaultValue: 1)
 		input ("refreshInterval", "enum", title: "Device Refresh Interval (minutes)",
 			   options: ["1", "5", "15", "30"], defaultValue: "30")
-		input ("fastPoll", "enum",title: "Enable fast polling", 
-			   options: ["No", "1", "2", "3", "4", "5", "10", "15"], defaultValue: "No")
+		input ("shortPoll", "number",title: "Fast Polling Interval ('0' = DISABLED)",
+			   defaultValue: 0)
 		input ("nameSync", "enum", title: "Synchronize Names", defaultValue: "none",
 			   options: ["none": "Don't synchronize",
 						 "device" : "bleBox device name master", 
@@ -47,11 +51,13 @@ metadata {
 		input ("descriptionText", "bool", title: "Enable description text logging", defaultValue: true)
 	}
 }
+
 def installed() {
 	logInfo("Installing...")
 	state.savedLevel = 255
 	runIn(2, updated)
 }
+
 def updated() {
 	logInfo("Updating...")
 	unschedule()
@@ -71,18 +77,34 @@ def updated() {
 		case "15" : runEvery15Minutes(refresh); break
 		default: runEvery30Minutes(refresh)
 	}
-
-	if (!fastPoll || fastPoll =="No") { state.pollInterval = "0" }
-	else { state.pollInterval = fastPoll }
-
-	if (nameSync == "device" || nameSync == "hub") { syncName() }
+	if (shortPoll == null) { device.updateSetting("shortPoll",[type:"number", value:0]) }
+	state.errorCount = 0
 	state.defFadeSpeed = getFadeSpeed(transTime)
 	updateDataValue("driverVersion", driverVer())
 
+	logInfo("fastPoll interval set to ${shortPoll}")
+	logInfo("Default Fade Speed set to ${state.defFadeSpeed} seconds")
 	logInfo("Debug logging is: ${debug}.")
 	logInfo("Description text logging is ${descriptionText}.")
 	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
-	refresh()
+
+	if (!getDataValue("mode")) {
+		sendGetCmd("/api/dimmer/state", "configure")
+	}
+	if (nameSync == "device" || nameSync == "hub") { runIn(5, syncName) }
+	runIn(2, refresh)
+}
+
+def configure(response) {
+	def cmdResponse = parseResponse(response)
+	logDebug("configure: ${cmdResponse}")
+	if (cmdResponse == "error") { return }
+	def mode = "dimmable"
+	if (cmdResponse.dimmer.loadType == "2") {
+		mode = "undimmable"
+		sendEvent(name: "level", value: null)
+	}
+	updateDataValue("mode", mode)
 }
 
 
@@ -93,22 +115,27 @@ def on() {
 				"""{"dimmer":{"desiredBrightness":${state.savedLevel},"fadeSpeed":${state.defFadeSpeed}}}""",
 				"commandParse")
 }
+
 def off() {
 	logDebug("off")
 	sendPostCmd("/api/dimmer/set",
 				"""{"dimmer":{"desiredBrightness":0,"fadeSpeed":${state.defFadeSpeed}}}""",
 				"commandParse")
 }
+
 def setLevel(level, transitionTime = null) {
-	def fadeSpeed = state.defFadeSpeed
-	if (transitionTime != null) { fadeSpeed = getFadeSpeed(transitionTime) }
-	logDebug("setLevel: level = ${level} // ${fadeSpeed}")
-	level255 = (2.55 * level + 0.5).toInteger()
-	state.savedLevel = level255
-	sendPostCmd("/api/dimmer/set",
-				"""{"dimmer":{"desiredBrightness":${level255},"fadeSpeed":${fadeSpeed}}}""",
-				"commandParse")
+	if (getDataValue("mode") == "dimmable") {
+		def fadeSpeed = state.defFadeSpeed
+		if (transitionTime != null) { fadeSpeed = getFadeSpeed(transitionTime) }
+		logDebug("setLevel: level = ${level} // ${fadeSpeed}")
+		level255 = (2.55 * level + 0.5).toInteger()
+		state.savedLevel = level255
+		sendPostCmd("/api/dimmer/set",
+					"""{"dimmer":{"desiredBrightness":${level255},"fadeSpeed":${fadeSpeed}}}""",
+					"commandParse")
+	}
 }
+
 def getFadeSpeed(transitionTime) {
 	logDebug("getFadeSpeed: ${transitionTime}")
 	def timeIndex = (10* transitionTime.toFloat()).toInteger()
@@ -134,18 +161,14 @@ def getFadeSpeed(transitionTime) {
 	}
 	return fadeSpeed
 }
+
 def refresh() {
 	logDebug("refresh")
 	sendGetCmd("/api/dimmer/state", "commandParse")
 }
-def quickPoll() { sendGetCmd("/api/dimmer/state", "commandParse") }
+
 def commandParse(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
+	def cmdResponse = parseInput(response)
 	logDebug("commandParse: response = ${cmdResponse}")
 
 	def level = cmdResponse.dimmer.desiredBrightness
@@ -153,7 +176,9 @@ def commandParse(response) {
 	def onOff = "off"
 	if (level > 0) { onOff = "on" }
 	sendEvent(name: "switch", value: onOff)
-	sendEvent(name: "level", value: level)
+	if (getDataValue("mode") == "dimmable") {
+		sendEvent(name: "level", value: level)
+	}
 	logInfo "commandParse: switch = ${onOff}, level = ${level}"
 	if (state.pollInterval != "0") {
 		runIn(state.pollInterval.toInteger(), quickPoll)
@@ -173,22 +198,12 @@ def syncName() {
 	}
 }
 def nameSyncHub(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
+	def cmdResponse = parseInput(response)
 	logDebug("nameSyncHub: ${cmdResponse}")
 	logInfo("Setting bleBox device label to that of the Hubitat device.")
 }
 def nameSyncDevice(response) {
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
-	def jsonSlurper = new groovy.json.JsonSlurper()
-	def cmdResponse = jsonSlurper.parseText(response.body)
+	def cmdResponse = parseInput(response)
 	logDebug("nameSyncDevice: ${cmdResponse}")
 	def deviceName = cmdResponse.device.deviceName
 	device.setLabel(deviceName)
@@ -198,12 +213,16 @@ def nameSyncDevice(response) {
 
 //	===== Communications =====
 private sendGetCmd(command, action){
-	logDebug("sendCmd: command = ${command} // device IP = ${getDataValue("deviceIP")}")
+	logDebug("sendGetCmd: ${command} / ${action} / ${getDataValue("deviceIP")}")
+	state.lastCommand = [type: "get", command: "${command}", body: "n/a", action: "${action}"]
+	runIn(3, setCommsError)
 	sendHubCommand(new hubitat.device.HubAction("GET ${command} HTTP/1.1\r\nHost: ${getDataValue("deviceIP")}\r\n\r\n",
 				   hubitat.device.Protocol.LAN, null,[callback: action]))
 }
 private sendPostCmd(command, body, action){
-	logDebug("sendPostCmd: command = ${command} // body = ${body}")
+	logDebug("sendGetCmd: ${command} / ${body} / ${action} / ${getDataValue("deviceIP")}")
+	state.lastCommand = [type: "post", command: "${command}", body: "${body}", action: "${action}"]
+	runIn(3, setCommsError)
 	def parameters = [ method: "POST",
 					  path: command,
 					  protocol: "hubitat.device.Protocol.LAN",
@@ -212,6 +231,48 @@ private sendPostCmd(command, body, action){
 						  Host: getDataValue("deviceIP")
 					  ]]
 	sendHubCommand(new hubitat.device.HubAction(parameters, null, [callback: action]))
+}
+def parseInput(response) {
+	unschedule(setCommsError)
+	state.errorCount = 0
+	sendEvent(name: "commsError", value: false)
+	if(response.status != 200 || response.body == null) {
+		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
+		return
+	}
+	try {
+		def jsonSlurper = new groovy.json.JsonSlurper()
+		return jsonSlurper.parseText(response.body)
+	} catch (error) {
+		logWarn "CommsError: ${error}."
+	}
+}
+def setCommsError() {
+	logDebug("setCommsError")
+	if (state.errorCount < 3) {
+		state.errorCount+= 1
+		repeatCommand()
+		logWarn("Attempt ${state.errorCount} to recover communications")
+	} else if (state.errorCount == 3) {
+		state.errorCount += 1
+		if (!getDataValue("applicationVersion")) {
+			logWarn("setCommsError: Parent commanded to poll for devices to correct error.")
+			parent.updateDeviceIps()
+			runIn(90, repeatCommand)
+		}
+	} else {
+		sendEvent(name: "commsError", value: true)
+		logWarn "setCommsError: No response from device.  Refresh.  If off line " +
+				"persists, check IP address of device."
+	}
+}
+def repeatCommand() { 
+	logDebug("repeatCommand: ${state.lastCommand}")
+	if (state.lastCommand.type == "post") {
+		sendPostCmd(state.lastCommand.command, state.lastCommand.body, state.lastCommand.action)
+	} else {
+		sendGetCmd(state.lastCommand.command, state.lastCommand.action)
+	}
 }
 
 
@@ -224,30 +285,4 @@ def logDebug(msg){
 }
 def logWarn(msg){ log.warn "<b>${device.label} ${driverVer()}</b> ${msg}" }
 
-/*
-dimmerBox
------ Device Installation Assumptions
-	loadType set to 1.  With loadType of 2, use dimmerBox NoDim driver.
------ Capability and Commands
-	Capability: Switch:
-		Command: on():	Turns on the device with the level at the last used level.
-		Command: off():	Turns off the device.
-		Attribute:	switch:	Current value of the switch state (on or off).
-	Capability Switch Level
-		Command: level from 0 to 100, representing 0 to 255 brightness in the currentBrightness
-				 value in the dimmerBox.
-	Capability:	Actuator.  Used for rule machine (and others) to access switch commands.
-	Capability: Refresh
-		Command: refresh().  Forces reading of dimmerBox state data.
------ Preferences
-	device_IP:  Used in manual installation of driver only.
-	transTime: The time (in seconds) for the device to transition from 0 to full brightness.
-	refreshInterval:  frequency to refresh the attribute 'contact'.  Sets to a default
-					  of 30 minutes.
-	fastPoll: provides a fast polling interval (seconds).  Note that this uses Hub
-			  resources and can impact a Hub's perceived performance if near limits.
-	nameSync: Coordinates the naming between the device and the Hubitat interface.
-			  'Hubitat Label Master' - changes name in bleBox device
-			  'bleBox device name master' - changes Hubitat label to name in bleBox device.
-*/
 //	end-of-file
