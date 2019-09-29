@@ -16,9 +16,10 @@ open API documentation for development and is intended for integration into the 
 08.14.19	Various edits.
 08.15.19	1.1.01. Integrated design notes at bottom and updated implementation per notes.
 09.20.19	1.2.01.	Added link to Application that will check/update IPs if the communications fail.
+10.01.19	1.3.01. Updated error handling.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.2.01" }
+def driverVer() { return "1.3.01" }
 metadata {
 	definition (name: "bleBox switchBoxD",
 				namespace: "davegut",
@@ -115,7 +116,7 @@ def commandParse(response) {
 	if (thisRelay.state == 1) { onOff = "on" }
 	if (onOff != device.currentValue("switch")) {
 		sendEvent(name: "switch", value: onOff)
-		logInfo("cmdResponse: switch = off")
+		logInfo("cmdResponse: switch = ${onOff}")
 	}
 	if (shortPoll.toInteger() > 0) { runIn(shortPoll.toInteger(), refresh) }
 }
@@ -175,10 +176,6 @@ def parseInput(response) {
 	unschedule(setCommsError)
 	state.errorCount = 0
 	sendEvent(name: "commsError", value: false)
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
 	try {
 		def jsonSlurper = new groovy.json.JsonSlurper()
 		return jsonSlurper.parseText(response.body)

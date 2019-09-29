@@ -16,27 +16,31 @@ open API documentation for development and is intended for integration into the 
 08.14.19	Added Capability Sensor to provide hook for applications.
 08.15.19	1.1.01. Integrated design notes at bottom and updated implementation per notes.
 09.20.19	1.2.01.	Added link to Application that will check/update IPs if the communications fail.
+10.01.19	1.3.01. Updated error handling.  Updated attributes and commands for better match with ST implementation.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.2.01" }
+def driverVer() { return "1.3.01" }
 metadata {
 	definition (name: "bleBox airSensor",
 				namespace: "davegut",
 				author: "Dave Gutheinz",
 				importUrl: "https://raw.githubusercontent.com/DaveGut/bleBox-Hubitat/master/Drivers/airSensor.groovy"
 			   ) {
-		capability "Momentary"
 		capability "Sensor"
 		attribute "PM_1_Measurement", "string"
 		attribute "PM_1_Trend", "string"
 		attribute "PM_2_5_Measurement", "string"
 		attribute "PM_2_5_Trend", "string"
-		attribute "PM_2_5_Quality", "number"
+		attribute "pm2_5Quality", "number"
 		attribute "PM_10_Measurement", "string"
 		attribute "PM_10_Trend", "string"
-		attribute "PM_10_Quality", "number"
+		attribute "pm10Quality", "number"
 		attribute "airQuality", "string"
-		attribute "kickActive", "bool"
+		attribute "airQualityLevel", "string"
+		attribute "measurementTime", "string"
+		command "forceMeasurement"
+		attribute "updatingData", "bool"
+		capability "Refresh"
 		attribute "commsError", "bool"
 	}
 	preferences {
@@ -48,7 +52,6 @@ metadata {
 						 "device" : "bleBox device name master", 
 						 "hub" : "Hubitat label master"])
 		input ("statusLed", "bool", title: "Enable the Status LED", defaultValue: true)
-//		input ("debug", "bool", title: "Enable debug logging", defaultValue: false)
 		input ("debug", "bool", title: "Enable debug logging", defaultValue: false)
 		input ("descriptionText", "bool", title: "Enable description text logging", defaultValue: true)
 	}
@@ -87,99 +90,96 @@ def updated() {
 
 
 //	===== Commands and updating state =====
-def push() {
-	logDebug("push.")
+def forceMeasurement() {
+	logDebug("forceMeasurment")
 	sendGetCmd("/api/air/kick", "kickParse")
 }
-
 def kickParse(response) {
 	def cmdResponse = parseInput(response)
-	logDebug("kickResponse.  Measurement has started and will take about 1 minute for results to show.")
-	sendEvent(name: "kickActive", value: true)
-	runIn(60, postKick)
+	logDebug("kickParse.  Measurement has started and will take about 1 minute for results to show.")
+	sendEvent(name: "updatingData", value: true)
+	runIn(50, postKick)
 }
-
 def postKick() {
-	logDebug("postKick.  Measuring quality post Kick.")
+	logDebug("postKick.  Retrieving air quality data.")
 	sendEvent(name: "kickActive", value: false)
 	refresh()
 }
-
 def refresh() {
 	logDebug("refesh.")
 	sendGetCmd("/api/air/state", "commandParse")
 }
-
 def commandParse(response) {
 	def cmdResponse = parseInput(response)
 	logDebug("commandParse: cmdResp = ${cmdResponse}")
-	//	=====	Capture PM_1 Data
+    
 	def pm1Data = cmdResponse.air.sensors.find{ it.type == "pm1" }
-	def pm1Value = pm1Data.value
-	//	=====	Capture PM_2.5 Data
+    def pm1Value = pm1Data.value.toInteger()
+    def pm1Trend = getTrendText(pm1Data.trend)
+    
 	def pm2_5Data = cmdResponse.air.sensors.find{ it.type == "pm2.5" }
-	def pm25Value = pm2_5Data.value
-	def pm25Qual = pm2_5Data.qualityLevel
-	//	=====	Capture PM_10 Data
+    def pm25Value = pm2_5Data.value.toInteger()
+    def pm25Trend = getTrendText(pm2_5Data.trend)
+    
 	def pm10Data = cmdResponse.air.sensors.find{ it.type == "pm10" }
-	def pm10Value = pm10Data.value
-	def pm10Qual = pm10Data.qualityLevel
-	
-//	Simulated data for test
-//	pm1Value = 33
-//	pm25Value = 50
-//	pm25Qual = 6
-//	pm10Value = 20
-//	pm10Qual = 2	
-	
-	sendEvent(name: "PM_1_Measurement", value: pm1Value, unit: "micro-g/m3")
-	sendEvent(name: "PM_1_Trend", value: "${getTrendText(pm1Data.trend)}")
-	sendEvent(name: "PM_2_5_Quality", value: (4 * pm25Value).toInteger())
-	sendEvent(name: "PM_2_5_Measurement", value: pm25Value, unit: "micro-g/m3")
-	sendEvent(name: "PM_2_5_Trend", value: "${getTrendText(pm2_5Data.trend)}")
-	sendEvent(name: "PM_10_Quality", value: (2 * pm10Value).toInteger())
-	sendEvent(name: "PM_10_Measurement", value: pm10Value, unit: "micro-g/m3")
-	sendEvent(name: "PM_10_Trend", value: "${getTrendText(pm10Data.trend)}")
-	def airQual = Math.max(pm25Qual, pm10Qual)
-	switch(airQual) {
-		case 1:
-		sendEvent(name: "airQuality", value: "Very Good")
-		break
-		case 2:
-		sendEvent(name: "airQuality", value: "Good")
-		break
-		case 3:
-		sendEvent(name: "airQuality", value: "Moderate")
-		break
-		case 4:
-		sendEvent(name: "airQuality", value: "Sufficient")
-		break
-		case 5:
-		sendEvent(name: "airQuality", value: "Bad")
-		break
-		case 6:
-		sendEvent(name: "airQuality", value: "Very Bad")
-		break
-		default:
-		sendEvent(name: "airQuality", value: "not available")
-	}
-	logInfo("refreshParse: Air Quality Data, Index and Category Updated")
-}
+    def pm10Value = pm10Data.value.toInteger()
+    def pm10Trend = getTrendText(pm10Data.trend)
+//	===== SIMULATION DATA TO CHECK ALGORITHM =====
+//	pm1Value = 10
+//	pm25Value = 66
+//	pm10Value = 133
 
+//	Create Air Quality Index using EU standard for measurement. Reference:
+//	"http://www.airqualitynow.eu/about_indices_definition.php", utilizing the 
+//	Background Index for 1 hour against the sensor provided data.  Values are
+//	0 to 500 with 100 per the grid values on the index.
+	def pm25Quality
+	switch(pm25Value) {
+    	case 0..30: pm25Quality = (50 * pm25Value / 30).toInteger(); break
+        case 31..55: pm25Quality = 20 + pm25Value - 30; break
+        case 56..110: pm25Quality = 75 + (25 * (pm25Value - 55) / 55).toInteger(); break
+        default: pm25Quality = (0.5 + (100 *pm25Value/110) ).toInteger()
+    }
+
+	def pm10Quality
+	switch(pm10Value) {
+    	case 0..30: pm10Quality = (50 * pm10Value / 50).toInteger(); break
+        case 31..55: pm10Quality = 50 + (25 * (pm10Value - 50) / 40).toInteger(); break
+        case 56..180: pm10Quality = 75 + (25 * (pm10Value - 90) / 90).toInteger(); break
+        default: pm10Quality = (0.5 + (100*pm10Value /180)).toInteger()
+    }
+
+	def airQuality = Math.max(pm25Quality, pm10Quality)
+    def airQualityLevel
+    switch(airQuality) {
+    	case 0..25: airQualityLevel = "Very Low" ; break
+        case 26..50: airQualityLevel = "Low" ; break
+        case 51..75: airQualityLevel = "Moderate" ; break
+        case 75..100: airQualityLevel = "High" ; break
+        default: airQualityLevel = "Very High"
+    }
+
+	sendEvent(name: "PM_1_Measurement", value: pm1Value, unit: 'µg/m³')
+	sendEvent(name: "PM_1_Trend", value: pm1Trend)
+	sendEvent(name: "PM_2_5_Measurement", value: pm25Value, unit: 'µg/m³')
+	sendEvent(name: "PM_2_5_Trend", value: pm25Trend)
+    sendEvent(name: "pm2_5Quality", value: pm25Quality)
+	sendEvent(name: "PM_10_Measurement", value: pm10Value, unit: 'µg/m³')
+	sendEvent(name: "PM_10_Trend", value: pm10Trend)
+    sendEvent(name: "pm10Quality", value: pm10Quality)
+   	sendEvent(name: "airQuality", value: airQuality, unit: "CAQI")
+    sendEvent(name: "airQualityLevel", value: airQualityLevel)
+	def now = new Date(now()).format("h:mm:ss a '\non' M/d/yyyy", location.timeZone).toLowerCase()
+    sendEvent(name: "measurementTime", value: now)
+	logInfo("commandParse: Air Quality Data, Index and Category Updated")
+}
 def getTrendText(trend) {
 	def trendText
 	switch(trend) {
-		case 1:
-			trendText = "Even"
-			break
-		case 2:
-			trendText = "Down"
-			break
-		case 3:
-			trendText = "Up"
-			break
-		default:
-			trendText = "no data"
+		case 1: trendText = "Even"; break
+		case 2: trendText = "Down"; break
+		case 3: trendText = "Up"; break
+		default: trendText = "no data"
 	}
 	return trendText
 }
@@ -251,15 +251,15 @@ def parseInput(response) {
 	unschedule(setCommsError)
 	state.errorCount = 0
 	sendEvent(name: "commsError", value: false)
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
 	try {
 		def jsonSlurper = new groovy.json.JsonSlurper()
 		return jsonSlurper.parseText(response.body)
 	} catch (error) {
-		logWarn "CommsError: ${error}."
+		if (response.status == 204) {
+			logDebug("parseInput: valid 204 return to kick command")
+		} else {
+			logWarn "CommsError: ${error}."
+		}
 	}
 }
 def setCommsError() {
@@ -270,7 +270,7 @@ def setCommsError() {
 		logWarn("Attempt ${state.errorCount} to recover communications")
 	} else if (state.errorCount == 3) {
 		state.errorCount += 1
-		if (!getDataValue("applicationVersion")) {
+		if (getDataValue("applicationVersion")) {
 			logWarn("setCommsError: Parent commanded to poll for devices to correct error.")
 			parent.updateDeviceIps()
 			runIn(90, repeatCommand)

@@ -15,9 +15,10 @@ open API documentation for development and is intended for integration into the 
 ===== Hiatory =====
 09.20.19	1.2.01.	Initial Parent - Child driver release.
 					Added link to Application that will check/update IPs if the communications fail.
+10.01.19	1.3.01. Updated error handling.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.2.01" }
+def driverVer() { return "1.3.01" }
 metadata {
 	definition (name: "bleBox wLightBox",
 				namespace: "davegut",
@@ -294,10 +295,6 @@ def parseInput(response) {
 	unschedule(setCommsError)
 	state.errorCount = 0
 	sendEvent(name: "commsError", value: false)
-	if(response.status != 200 || response.body == null) {
-		logWarn("parseInput: Command generated an error return: ${response.status} / ${response.body}")
-		return
-	}
 	try {
 		def jsonSlurper = new groovy.json.JsonSlurper()
 		return jsonSlurper.parseText(response.body)
