@@ -19,6 +19,7 @@ open API documentation for development and is intended for integration into the 
 */
 //	===== Definitions, Installation and Updates =====
 def driverVer() { return "1.3.01" }
+
 metadata {
 	definition (name: "bleBox wLightBox",
 				namespace: "davegut",
@@ -310,7 +311,7 @@ def setCommsError() {
 		logWarn("Attempt ${state.errorCount} to recover communications")
 	} else if (state.errorCount == 3) {
 		state.errorCount += 1
-		if (!getDataValue("applicationVersion")) {
+		if (getDataValue("applicationVersion")) {
 			logWarn("setCommsError: Parent commanded to poll for devices to correct error.")
 			parent.updateDeviceIps()
 			runIn(90, repeatCommand)

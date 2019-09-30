@@ -20,6 +20,7 @@ open API documentation for development and is intended for integration into the 
 */
 //	===== Definitions, Installation and Updates =====
 def driverVer() { return "1.3.01" }
+
 metadata {
 	definition (name: "bleBox airSensor",
 				namespace: "davegut",
@@ -94,21 +95,25 @@ def forceMeasurement() {
 	logDebug("forceMeasurment")
 	sendGetCmd("/api/air/kick", "kickParse")
 }
+
 def kickParse(response) {
 	def cmdResponse = parseInput(response)
 	logDebug("kickParse.  Measurement has started and will take about 1 minute for results to show.")
 	sendEvent(name: "updatingData", value: true)
 	runIn(50, postKick)
 }
+
 def postKick() {
 	logDebug("postKick.  Retrieving air quality data.")
 	sendEvent(name: "kickActive", value: false)
 	refresh()
 }
+
 def refresh() {
 	logDebug("refesh.")
 	sendGetCmd("/api/air/state", "commandParse")
 }
+
 def commandParse(response) {
 	def cmdResponse = parseInput(response)
 	logDebug("commandParse: cmdResp = ${cmdResponse}")
@@ -173,6 +178,7 @@ def commandParse(response) {
     sendEvent(name: "measurementTime", value: now)
 	logInfo("commandParse: Air Quality Data, Index and Category Updated")
 }
+
 def getTrendText(trend) {
 	def trendText
 	switch(trend) {
@@ -194,6 +200,7 @@ def setLed() {
 				"""{"settings":{"statusLed":{"enabled":${enable}}}}""",
 				"ledStatusParse")
 }
+
 def ledStatusParse(response) {
 	def cmdResponse = parseInput(response)
 	state.statusLed = cmdResponse.settings.statusLed.enabled
