@@ -65,6 +65,9 @@ def updated() {
 		}
 		updateDataValue("deviceIP", device_IP)
 		logInfo("Device IP set to ${getDataValue("deviceIP")}")
+		//	Update device name on manual installation to standard name
+		sendGetCmd("/api/device/state", "setDeviceName")
+		pauseExecution(1000)
 	}
 
 	switch(refreshInterval) {
@@ -82,6 +85,13 @@ def updated() {
 
 	if (nameSync == "device" || nameSync == "hub") { syncName() }
 	refresh()
+}
+
+def setDeviceName(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("setDeviceData: ${cmdResponse}")
+	device.setName(cmdResponse.device.type)
+	logInfo("setDeviceData: Device Name updated to ${cmdResponse.device.type}")
 }
 
 

@@ -68,6 +68,9 @@ def updated() {
 		}
 		updateDataValue("deviceIP", device_IP)
 		logInfo("Device IP set to ${getDataValue("deviceIP")}")
+		//	Update device name on manual installation to standard name
+		sendGetCmd("/api/device/state", "setDeviceName")
+		pauseExecution(1000)
 	}
 
 	switch(refreshInterval) {
@@ -84,15 +87,22 @@ def updated() {
 	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
 
 	if (!getDataValue("mode")) {
-		sendGetCmd("/api/gate/state", "configure")
+		sendGetCmd("/api/gate/state", "setGateType")
 	}
 	if (nameSync == "device" || nameSync == "hub") { runIn(5, syncName) }
 	runIn(2, refresh)
 }
 
-def configure(response) {
+def setDeviceName(response) {
 	def cmdResponse = parseInput(response)
-	logDebug("configure: <b>${cmdResponse}")
+	logDebug("setDeviceData: ${cmdResponse}")
+	device.setName(cmdResponse.device.type)
+	logInfo("setDeviceData: Device Name updated to ${cmdResponse.device.type}")
+}
+
+def setGateType(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("setGateType: <b>${cmdResponse}")
 	if (cmdResponse == "error") { return }
 	def mode
 	switch(cmdResponse.gateType) {
@@ -103,6 +113,7 @@ def configure(response) {
 		default: mode = "notSet"
 	}
 	updateDataValue("mode", mode)
+	logInfo("setGateType: Gate Type set to ${mode}")
 }
 
 

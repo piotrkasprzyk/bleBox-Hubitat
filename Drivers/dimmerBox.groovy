@@ -71,6 +71,13 @@ def updated() {
 		}
 		updateDataValue("deviceIP", device_IP)
 		logInfo("Device IP set to ${getDataValue("deviceIP")}")
+		//	Update device name on manual installation to standard name
+		sendGetCmd("/api/device/state", "setDeviceName")
+		pauseExecution(1000)
+	}
+
+	if (!getDataValue("mode")) {
+		sendGetCmd("/api/dimmer/state", "setDimmerMode")
 	}
 
 	switch(refreshInterval) {
@@ -90,17 +97,20 @@ def updated() {
 	logInfo("Description text logging is ${descriptionText}.")
 	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
 
-	if (!getDataValue("mode")) {
-		sendGetCmd("/api/dimmer/state", "configure")
-	}
 	if (nameSync == "device" || nameSync == "hub") { runIn(5, syncName) }
 	runIn(2, refresh)
 }
 
-def configure(response) {
-	def cmdResponse = parseResponse(response)
-	logDebug("configure: ${cmdResponse}")
-	if (cmdResponse == "error") { return }
+def setDeviceName(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("setDeviceData: ${cmdResponse}")
+	device.setName(cmdResponse.device.type)
+	logInfo("setDeviceData: Device Name updated to ${cmdResponse.device.type}")
+}
+
+def setDimmerMode(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("setDimmerMode: ${cmdResponse}")
 	def mode = "dimmable"
 	if (cmdResponse.dimmer.loadType == "2") {
 		mode = "undimmable"

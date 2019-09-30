@@ -67,6 +67,9 @@ def updated() {
 		}
 		updateDataValue("deviceIP", device_IP)
 		logInfo("Device IP set to ${getDataValue("deviceIP")}")
+		//	Update device name on manual installation to standard name
+		sendGetCmd("/api/device/state", "setDeviceName")
+		pauseExecution(1000)
 	}
 
 	switch(refreshInterval) {
@@ -83,15 +86,22 @@ def updated() {
 	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
 
 	if (!getDataValue("mode")) {
-		sendGetCmd("/api/settings/state", "configure")
+		sendGetCmd("/api/settings/state", "setShutterType")
 	}
 	if (nameSync == "device" || nameSync == "hub") { syncName() }
 	runIn(2, refresh)
 }
 
-def configure(response) {
+def setDeviceName(response) {
 	def cmdResponse = parseInput(response)
-	logDebug("configure: ${cmdResponse}")
+	logDebug("setDeviceData: ${cmdResponse}")
+	device.setName(cmdResponse.device.type)
+	logInfo("setDeviceData: Device Name updated to ${cmdResponse.device.type}")
+}
+
+def setShutterType(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("setShutterType: ${cmdResponse}")
 	if (cmdResponse == "error") { return }
 	def mode
 	switch (cmdResponse.settings.shutter.controlType) {
@@ -108,6 +118,7 @@ def configure(response) {
 	if (mode != "tilt") {
 		sendEvent(name: "tilt", value: null)
 	}
+	logInfo("setShutterType: Shutter Type set to ${mode}")
 }
 
 
