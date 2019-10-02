@@ -120,6 +120,7 @@ def parseReturnData(hexDesired) {
 		def color = ["hue": 0, "saturation": 0, "level": 0]
 		sendEvent(name: "color", value: color)
 		sendEvent(name: "RGB", value: "000000")
+		logInfo("parseReturnData: Device is Off")
 	} else {
 		sendEvent(name: "switch", value: "on")
 		state.savedLevel = hexDesired[0..5]
@@ -137,6 +138,7 @@ def parseReturnData(hexDesired) {
 		sendEvent(name: "color", value: color)
 		setColorName(hue)
 		sendEvent(name: "RGB", value: hexLevel)
+		logInfo("parseReturnData: On, hue: ${hue}, saturation: ${saturation}, level: ${level}")
 	}
 }
 

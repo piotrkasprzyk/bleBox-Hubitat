@@ -108,21 +108,22 @@ def parseReturnData(hexDesired) {
 	}
 	if (hexLevel == "0000") {
 		sendEvent(name: "switch", value: "off")
-		sendEvent(name: "level", value: 0)
+		logInfo("parseReturnData: Device id Off")
 	} else {
 		sendEvent(name: "switch", value: "on")
 		state.savedLevel = hexLevel
+		def ct = device.currentValue("colorTemperature")
 		def level = device.currentValue("level")
 		def coolFactor = 100 * hubitat.helper.HexUtils.hexStringToInt(hexLevel[0..1]) / level
 		def warmFactor = 100 * hubitat.helper.HexUtils.hexStringToInt(hexLevel[2..3]) / level
 		def ctRange = ctHigh - ctLow
 		if (coolFactor <= warmFactor) {
-			ct = ctHigh - (0.5 + coolFactor * ctRange/510).toInteger()
+		ct = ctHigh - (0.5 + coolFactor * ctRange/510).toInteger()
 		} else {
 			ct = ctLow + (0.5 + warmFactor * ctRange/510).toInteger()
 		}
 		sendEvent(name: "colorTemperature", value: ct)
-		logInfo("parseReturnData: set to on at ${ct}K / ${level}%")
+		logInfo("parseReturnData: On, color temp: ${ct}K, level: ${level}%")
 		setColorTempData(ct)
 	}
 }

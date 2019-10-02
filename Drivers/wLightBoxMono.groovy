@@ -96,12 +96,14 @@ def parseReturnData(hexDesired) {
 	if (hexLevel == "00") {
 		sendEvent(name: "switch", value: "off")
 		sendEvent(name: "level", value: 0)
+		logInfo("parseReturnData: Devic is off")
 	} else {
 		sendEvent(name: "switch", value: "on")
 		state.savedLevel = hexLevel
 		def level = hubitat.helper.HexUtils.hexStringToInt(hexLevel)
 		level = (0.5 + (level / 2.55)).toInteger()
 		sendEvent(name: "level", value: level)
+		logInfo("parseReturnData: On, level: ${level}")
 	}
 }
 

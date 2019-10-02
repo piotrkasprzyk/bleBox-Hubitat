@@ -29,7 +29,6 @@ metadata {
 		capability "Switch"
 		capability "Actuator"
 		capability "Refresh"
-		capability "Initialize"
 		attribute "commsError", "bool"
 	}
 	preferences {
@@ -51,13 +50,16 @@ metadata {
 def installed() {
 	logInfo("Installing...")
 	state.savedLevel = "00000000"
-	runIn(2, updated)
+	runIn(1, updated)
 }
 
 def updated() {
 	logInfo("Updating...")
+	logInfo("Default fade speed set to ${state.defFadeSpeed}")
+	logInfo("Debug logging is: ${debug}.")
+	logInfo("Description text logging is ${descriptionText}.")
 	unschedule()
-	
+
 	if (!getDataValue("applicationVersion")) {
 		if (!device_IP) {
 			logWarn("updated:  deviceIP  is not set.")
@@ -65,32 +67,29 @@ def updated() {
 		}
 		updateDataValue("deviceIP", device_IP)
 		logInfo("Device IP set to ${getDataValue("deviceIP")}")
-		//	Update device name on manual installation to standard name
-		sendGetCmd("/api/device/state", "setDeviceName")
-		pauseExecution(1000)
 	}
 
+	if(!getDataValue("driverVersion")) {
+		sendGetCmd("/api/device/state", "setDeviceName")
+		pauseExecution(1000)
+		sendGetCmd("/api/rgbw/state", "addChildren")
+		pauseExecution(5000)
+		logInfo("updated: <b>successfully added children ${getChildDevices()}")
+	}
+	
 	switch(refreshInterval) {
 		case "1" : runEvery1Minute(refresh); break
 		case "5" : runEvery5Minutes(refresh); break
 		case "15" : runEvery15Minutes(refresh); break
 		default: runEvery30Minutes(refresh)
 	}
+	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
+
 	state.errorCount = 0
 	state.fadeSpeed = transTime
 	updateDataValue("driverVersion", driverVer())
-		
-	logInfo("Default fade speed set to ${state.defFadeSpeed}")
-	logInfo("Debug logging is: ${debug}.")
-	logInfo("Description text logging is ${descriptionText}.")
-	logInfo("Refresh interval set for every ${refreshInterval} minute(s).")
-
 	if (nameSync == "device" || nameSync == "hub") { syncName() }
-	if(!getChildDevices()) {
-		sendGetCmd("/api/rgbw/state", "addChildren")
-	}
-	
-	runIn(10, refresh)
+	runIn(1, refresh)
 }
 
 def setDeviceName(response) {
@@ -98,6 +97,72 @@ def setDeviceName(response) {
 	logDebug("setDeviceData: ${cmdResponse}")
 	device.setName(cmdResponse.device.type)
 	logInfo("setDeviceData: Device Name updated to ${cmdResponse.device.type}")
+}
+
+def addChildren(response) {
+	def cmdResponse = parseInput(response)
+	logDebug("addChildren: Adding children for mode = ${mode}")
+
+	def dni = device.getDeviceNetworkId()
+	def channel
+	def child
+	switch(cmdResponse.rgbw.colorMode) {
+		case "1":
+			channel = "rgbw"
+			addChild("wLightBox Rgbw", "${dni}-1", "${device.displayName} Rgbw", channel)
+			break
+		case "2":
+			channel = "rgb"
+			addChild("wLightBox Rgb", "${dni}-1", "${device.displayName} Rgb", channel)
+			break
+		case "3":
+			channel = "ch1"
+			addChild("wLightBox Mono", "${dni}-1", "${device.displayName} Ch1", channel)
+			pauseExecution(1000)
+			channel = "ch2"
+			addChild("wLightBox Mono", "${dni}-2", "${device.displayName} Ch2", channel)
+			pauseExecution(1000)
+			channel = "ch3"
+			addChild("wLightBox Mono", "${dni}-3", "${device.displayName} Ch3", channel)
+			pauseExecution(1000)
+			channel = "ch4"
+			addChild("wLightBox Mono", "${dni}-4", "${device.displayName} Ch4", channel)
+			break
+		case "4":
+			channel = "rgb"
+			addChild("wLightBox Rgb", "${dni}-1", "${device.displayName} Rgb", channel)
+			pauseExecution(1000)
+			channel = "ch4"
+			addChild("wLightBox Mono", "${dni}-2", "${device.displayName} White", channel)
+			break
+		case "5":
+			channel = "ct1"
+			addChild("wLightBox Ct", "${dni}-1", "${device.displayName} Ct1", channel)
+			break
+		case "6":
+			channel = "ct1"
+			addChild("wLightBox Ct", "${dni}-1", "${device.displayName} Ct1", channel)
+			pauseExecution(1000)
+			channel = "ct2"
+			addChild("wLightBox Ct", "${dni}-2", "${device.displayName} Ct2", channel)
+			break
+		default: 
+			logWarn("addChildren: No channel detected in message from device: ${cmdResponse}")
+			break
+	}
+	return
+}
+
+def addChild(type, dni, label, channel) {
+	logDebug("addChild: ${type} / ${dni} / ${label} / ${channel}")
+	try {
+		addChildDevice("davegut", "bleBox ${type}", "${dni}", [
+			"name": type, "label": label, "channel": channel, isComponent: false])
+	} catch (error) {
+		logWarn("addChild: failed. Error = ${error}")
+		return
+	}
+	logInfo("addChild: Added child ${type} / ${dni} / ${label} / ${channel}")
 }
 
 
@@ -112,27 +177,6 @@ def off() {
 	setRgbw("00000000")
 }
 
-def refresh() {
-	logDebug("refresh.")
-	sendGetCmd("/api/rgbw/state", "commandParse")
-}
-
-def commandParse(response) {
-	def cmdResponse = parseInput(response)
-	logDebug("commandParse: ${cmdResponse}")
-	def hexDesired = cmdResponse.rgbw.desiredColor.toUpperCase()
-	if (hexDesired == "00000000") {
-		sendEvent(name: "switch", value: "off")
-	} else {
-		sendEvent(name: "switch", value: "on")
-		state.savedLevel = hexDesired
-	}
-	//	Return data to the children
-	def children = getChildDevices()
-	children.each { it.parseReturnData(hexDesired) }
-}
-
-//	Determine and set rgbw value to device
 def childCommand(channel, level, transTime=state.fadeSpeed) {
 	logDebug("parseChildInput: ${channel}, ${level}, ${transTime}")
 	if(transTime == null){ transTime = state.fadeSpeed }
@@ -174,84 +218,27 @@ def setRgbw(rgbw, transTime = state.fadeSpeed) {
 	sendPostCmd("/api/rgbw/set",
 				"""{"rgbw":{"desiredColor":"${rgbw}","durationsMs":{"colorFade":${fadeSpeed}}}}""",
 				"commandParse")
-	state.fadeSpeed = transTime		//	Reset transitionTime to default.
+	state.fadeSpeed = transTime
 }
 
+def refresh() {
+	logDebug("refresh.")
+	sendGetCmd("/api/rgbw/state", "commandParse")
+}
 
-//	Determine mode and add child devices
-def addChildren(response) {
+def commandParse(response) {
 	def cmdResponse = parseInput(response)
-	logDebug("addChildren: <b>${cmdResponse}")
-	if (cmdResponse == "error") { return }
-
-	def mode = "rgbw"
-	switch(cmdResponse.rgbw.colorMode) {
-		case "2": mode = "rgb"; break
-		case "3": mode = "mono"; break
-		case "4": mode = "rgbOrW"; break
-		case "5": mode = "ct"; break
-		case "6": mode = "2Xct"; break
-		defalut: break
+	logDebug("commandParse: ${cmdResponse}")
+	def hexDesired = cmdResponse.rgbw.desiredColor.toUpperCase()
+	if (hexDesired == "00000000") {
+		sendEvent(name: "switch", value: "off")
+	} else {
+		sendEvent(name: "switch", value: "on")
+		state.savedLevel = hexDesired
 	}
-
-	logDebug("addChildren: Adding children for mode = ${mode}")
-	def dni = device.getDeviceNetworkId()
-	def channel
-	switch(mode) {
-		case "rgbw":
-			channel = "rgbw"
-			addChild("wLightBox Rgbw", "${dni}-1", "${device.displayName} Rgbw", channel)
-			break
-		case "rgb":
-			channel = "rgb"
-			addChild("wLightBox Rgb", "${dni}-1", "${device.displayName} Rgb", channel)
-			break
-		case "rgbOrW":
-			channel = "rgb"
-			addChild("wLightBox Rgb", "${dni}-1", "${device.displayName} Rgb", channel)
-			pauseExecution(2000)
-
-			channel = "ch4"
-			addChild("wLightBox Mono", "${dni}-2", "${device.displayName} White", channel)
-			break
-		case "mono":
-			channel = "ch1"
-			addChild("wLightBox Mono", "${dni}-1", "${device.displayName} Ch1", channel)
-			pauseExecution(2000)
-			channel = "ch2"
-			addChild("wLightBox Mono", "${dni}-2", "${device.displayName} Ch2", channel)
-			pauseExecution(2000)
-			channel = "ch3"
-			addChild("wLightBox Mono", "${dni}-3", "${device.displayName} Ch3", channel)
-			pauseExecution(2000)
-			channel = "ch4"
-			addChild("wLightBox Mono", "${dni}-4", "${device.displayName} Ch4", channel)
-			break
-		case "ct":
-			channel = "ct1"
-			addChild("wLightBox Ct", "${dni}-1", "${device.displayName} Ct1", channel)
-			break
-		case "2Xct":
-			channel = "ct1"
-			addChild("wLightBox Ct", "${dni}-1", "${device.displayName} Ct1", channel)
-			pauseExecution(2000)
-			channel = "ct2"
-			addChild("wLightBox Ct", "${dni}-2", "${device.displayName} Ct2", channel)
-			break
-		default: break
-	}
-}
-def addChild(type, dni, label, channel) {
-	logDebug("addChild: ${type} / ${dni} / ${label} / ${deviceData}")
-	addChildDevice("davegut",							//	Namespace
-				   "bleBox ${type}",					//	Type (Driver name)
-				   "${dni}",							//	DNI
-				   ["name": type,						//	Device name.  I use device type.
-					"label": label,						//	Display Display Name
-					"channel": channel,					//	Data Elements
-					isComponent: false])
-	logInfo("addChild: Added child ${type} / ${dni} / ${label} / ${deviceData}")
-	
+	//	Return data to the children
+	def children = getChildDevices()
+	children.each { it.parseReturnData(hexDesired) }
 }
 
 
