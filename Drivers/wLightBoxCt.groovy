@@ -15,9 +15,10 @@ open API documentation for development and is intended for integration into the 
 ===== Hiatory =====
 09.20.19	1.2.01.	Initial Parent-Child release.
 					Assumption is CT is set in the first value pair (CT, Level).
+10.05.19	1.2.02	Updated CT and Level related calculations.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.2.01" }
+def driverVer() { return "1.2.02" }
 metadata {
 	definition (name: "bleBox wLightBox Ct",
 				namespace: "davegut",
@@ -71,7 +72,7 @@ def off() {
 
 def setLevel(level, fadeSpeed = 2) {
 	logDebug("setLevel: level = ${level})")
-	sendEvent(name: "level", value: level.toInteger())
+//	sendEvent(name: "level", value: level.toInteger())
 	state.fadeSpeed = fadeSpeed
 	setColorTemperature(device.currentValue("colorTemperature"), level)
 }
@@ -79,13 +80,22 @@ def setLevel(level, fadeSpeed = 2) {
 def setColorTemperature(ct, level = device.currentValue("level")) {
 	logDebug("setColorTemperature: ${ct}K, ${level}%")
 	if (ct < ctLow || ct > ctHigh) { return }
-	def ctRange = ctHigh - ctLow
-	def warmFactor = [510*(ctHigh-ct)/ctRange, 255].min()
-	def warmLevel = (0.5 + level*warmFactor/100).toInteger()
-	warmHex = hubitat.helper.HexUtils.integerToHexString(warmLevel, 1)
-	def coolFactor = [510*(ct - ctLow)/ctRange, 255].min()
-	def coolLevel = (0.5 + level*coolFactor/100).toInteger()
-	coolHex = hubitat.helper.HexUtils.integerToHexString(coolLevel, 1)
+	level = level / 100
+	def ctMid = ((ctLow + ctHigh) / 2).toInteger()
+	def calcFactor = 255 / ((ctHigh - ctLow) * 0.5)
+	def warmValue
+	def coolValue
+	if (ct <= ctMid) {
+		warmValue = 255
+		coolValue = (0.5 + (ct - ctLow) * calcFactor).toInteger()
+	} else {
+		coolValue = 255
+		warmValue = (0.5 + (ctHigh - ct) * calcFactor).toInteger()
+	}
+	def warm255 = (0.5 + warmValue * level).toInteger()
+	def warmHex = hubitat.helper.HexUtils.integerToHexString(warm255, 1)
+	def cool255 = (0.5 + coolValue * level).toInteger()
+	def coolHex = hubitat.helper.HexUtils.integerToHexString(cool255, 1)
 	parent.childCommand(getDataValue("channel"), warmHex + coolHex, state.fadeSpeed)
 }
 
@@ -108,20 +118,26 @@ def parseReturnData(hexDesired) {
 	}
 	if (hexLevel == "0000") {
 		sendEvent(name: "switch", value: "off")
-		logInfo("parseReturnData: Device id Off")
+		sendEvent(name: "level", value: 0)
+		logInfo("parseReturnData: Device is Off")
 	} else {
-		sendEvent(name: "switch", value: "on")
 		state.savedLevel = hexLevel
-		def ct = device.currentValue("colorTemperature")
-		def level = device.currentValue("level")
-		def coolFactor = 100 * hubitat.helper.HexUtils.hexStringToInt(hexLevel[0..1]) / level
-		def warmFactor = 100 * hubitat.helper.HexUtils.hexStringToInt(hexLevel[2..3]) / level
-		def ctRange = ctHigh - ctLow
-		if (coolFactor <= warmFactor) {
-		ct = ctHigh - (0.5 + coolFactor * ctRange/510).toInteger()
+
+		def calcFactor = 255 / ((ctHigh - ctLow) * 0.5)
+		def warm255 = hubitat.helper.HexUtils.hexStringToInt(hexLevel[0..1])
+		def cool255 = hubitat.helper.HexUtils.hexStringToInt(hexLevel[2..3])
+		def level = Math.max(cool255, warm255) / 255
+		def warmValue = warm255 / level
+		def coolValue = cool255 / level
+		level = (0.5 + 100 * level).toInteger()		//	level to integer percent
+		def ct
+		if (coolValue <= warmValue) {
+			ct = (ctLow + coolValue / calcFactor).toInteger()
 		} else {
-			ct = ctLow + (0.5 + warmFactor * ctRange/510).toInteger()
+			ct = (ctHigh - warmValue / calcFactor).toInteger()
 		}
+		sendEvent(name: "switch", value: "on")
+		sendEvent(name: "level", value: level)
 		sendEvent(name: "colorTemperature", value: ct)
 		logInfo("parseReturnData: On, color temp: ${ct}K, level: ${level}%")
 		setColorTempData(ct)
