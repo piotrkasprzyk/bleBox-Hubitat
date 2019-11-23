@@ -13,6 +13,7 @@ DISCLAIMER: The author of this integration is not associated with blebox.  This 
 open API documentation for development and is intended for integration into the Hubitat Environment.
 
 ===== Hiatory =====
+11.23.19	Added authorization header to get/post requests (required for getting and changing gate state).
 8.14.19	Various edits.
 08.15.19	1.1.01. Modified implementaton based on design notes.
 09.20.19	1.2.01.	a.  Added link to Application that will check/update IPs if the communications fail.
@@ -21,7 +22,7 @@ open API documentation for development and is intended for integration into the 
 10.01.19	1.3.01. Updated error handling.
 */
 //	===== Definitions, Installation and Updates =====
-def driverVer() { return "1.3.01" }
+def driverVer() { return "1.3.02" }
 
 metadata {
 	definition (name: "bleBox gateBox",
@@ -49,6 +50,8 @@ metadata {
 						 "hub" : "Hubitat label master"])
 		input ("debug", "bool", title: "Enable debug logging", defaultValue: false)
 		input ("descriptionText", "bool", title: "Enable description text logging", defaultValue: true)
+        input ("authLogin", "text", title: "Auth login")
+        input ("authPassword", "text", title: "Auth password")
 	}
 }
 
@@ -165,15 +168,27 @@ def nameSyncDevice(response) {
 	logInfo("Hubit name for device changed to ${deviceName}.")
 }
 
-
 //	===== Communications =====
+private String getAuthorizationHeader() {
+  def encoded = "${authLogin}:${authPassword}".bytes.encodeBase64()
+  return "Basic ${encoded}"
+}
+
 private sendGetCmd(command, action){
 	logDebug("sendGetCmd: ${command} / ${action} / ${getDataValue("deviceIP")}")
 	state.lastCommand = [type: "get", command: "${command}", body: "n/a", action: "${action}"]
 	runIn(3, setCommsError)
-	sendHubCommand(new hubitat.device.HubAction("GET ${command} HTTP/1.1\r\nHost: ${getDataValue("deviceIP")}\r\n\r\n",
-				   hubitat.device.Protocol.LAN, null,[callback: action]))
+    def parameters = [ method: "GET",
+                      path: command,
+                      protocol: "hubitat.device.Protocol.LAN",
+                      body: body,
+                      headers: [
+                          Host: getDataValue("deviceIP"),
+                          Authorization: getAuthorizationHeader()
+                      ]]
+	sendHubCommand(new hubitat.device.HubAction(parameters, null, [callback: action]))
 }
+
 private sendPostCmd(command, body, action){
 	logDebug("sendGetCmd: ${command} / ${body} / ${action} / ${getDataValue("deviceIP")}")
 	state.lastCommand = [type: "post", command: "${command}", body: "${body}", action: "${action}"]
@@ -183,7 +198,8 @@ private sendPostCmd(command, body, action){
 					  protocol: "hubitat.device.Protocol.LAN",
 					  body: body,
 					  headers: [
-						  Host: getDataValue("deviceIP")
+						  Host: getDataValue("deviceIP"),
+						  Authorization: getAuthorizationHeader()
 					  ]]
 	sendHubCommand(new hubitat.device.HubAction(parameters, null, [callback: action]))
 }
